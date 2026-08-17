@@ -44,12 +44,29 @@ PyObject *BluePyOS::PyXUtil_Filter(PyObject *args)
         return PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: Length of index list value list don't match up"), nullptr;
 
 	//Get initial dude.  We assume all of them are the same, so we use this for info on how to index the data
-    PyObject *first;
-    Py_ssize_t setpos = 0;
-	Py_hash_t hash;
-    _PySet_NextEntry(rows, &setpos, &first, &hash);
+	//
+	// 3.13 moved _PySet_NextEntry into internal/pycore_setobject.h, gated on Py_BUILD_CORE, so
+	// it is no longer reachable from here. Rewritten over the public iterator protocol instead.
+	// NOTE: unlike _PySet_NextEntry (which yielded a *borrowed* reference), PyIter_Next yields
+	// an *owned* one -- every `first`/`row` obtained below is Py_DECREF'd on every exit path,
+	// including the error paths, or each row filtered leaks a reference.
+    PyObject *peekIter = PyObject_GetIter(rows);
+    if (!peekIter)
+        return NULL;
+    PyObject *first = PyIter_Next(peekIter);
+    Py_DECREF(peekIter);
+    if (!first)
+    {
+        // rows is non-empty (checked above), so NULL here means PyIter_Next raised.
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: failed to read first entry from set");
+        return NULL;
+    }
     if (!PyObject_IsInstance(first, (PyObject*)DBRow::GetType()))
+    {
+        Py_DECREF(first);
 		return PyErr_Format(PyExc_RuntimeError, "XUtil_Filter: Row in rowset must be of type DBRow");
+    }
 
 	// build standard vectors of these guys so we don't have to use python getters inside the loop.
 	int numConds = 0;
@@ -60,49 +77,85 @@ PyObject *BluePyOS::PyXUtil_Filter(PyObject *args)
 		PyObject *cndO = PyList_GET_ITEM(condvalues, j);
 		if (idxO == Py_None || cndO == Py_None)
 			continue;
-		
+
 		if (numConds >= sizeof(myvec) / sizeof(myvec[0]))
+		{
+			Py_DECREF(first);
 			 return PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: Too many conditions to Filter on."), nullptr;
-		
+		}
+
         int idx = int( PyLong_AS_LONG(idxO) );
         Py_ssize_t nullOffset; //throwaway
 		myvec[numConds].dataIdx = static_cast<DBRow*>( first )->GetDataOffset(idx, myvec[numConds].type, nullOffset);
 		if (myvec[numConds].dataIdx<0)
+		{
+			Py_DECREF(first);
 			return PyErr_SetString(PyExc_ValueError, "invalid column"), nullptr;
+		}
 		myvec[numConds].cond = PyLong_AsLongLong(cndO);
 		if (myvec[numConds].cond == (int64_t)(-1) && PyErr_Occurred())
+		{
+			Py_DECREF(first);
 			return PyErr_SetString(PyExc_OverflowError, "XUtil_Filter: 64 bit value overflowed! "), nullptr;
+		}
 		++numConds;
     }
-	
-     // go through the whole set and check each condition, continuing on any failure
-    setpos = 0;
-    PyObject* row;
-    while (_PySet_NextEntry(rows, &setpos, &row, &hash))
+	// done with `first` -- release the reference PyIter_Next gave us.
+	Py_DECREF(first);
+
+     // go through the whole set and check each condition, continuing on any failure.
+     // Peek-first-then-iterate over the public iterator API (see note above `first`).
+    PyObject *iter = PyObject_GetIter(rows);
+    if (!iter)
+        return NULL;
+
+    PyObject *row = PyIter_Next(iter);   // peek
+    while (row != NULL)
     {
         //  Error out if passed non-DBRows
         if (!PyObject_IsInstance(row, (PyObject*)DBRow::GetType()))
+        {
+            Py_DECREF(row);
+            Py_DECREF(iter);
             return PyErr_Format(PyExc_RuntimeError, "XUtil_Filter: Row in rowset must be of type DBRow");
-            
+        }
+
         // check each condition before adding to return list
         bool include = true;
         for (long j = 0; j < numConds; j++)
-        {  
+        {
             int64_t value;
 			if ( ! static_cast<DBRow*>( row )->GetValue(myvec[j].type, myvec[j].dataIdx, value) )
+			{
+				Py_DECREF(row);
+				Py_DECREF(iter);
                 return PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: Unsupported data type or index out of range for DBRow"), nullptr;
+			}
             if (myvec[j].cond != value)
             {
                 include = false;
                 break;
             }
         }
-        if (!include)
-            continue;
-        // All conditions hold, add to return set
-        if ( 0 != PySet_Add(retset, row) )
-            return 0; 
+        if (include)
+        {
+            // All conditions hold, add to return set
+            if ( 0 != PySet_Add(retset, row) )
+            {
+                Py_DECREF(row);
+                Py_DECREF(iter);
+                return 0;
+            }
+        }
+
+        Py_DECREF(row);
+        row = PyIter_Next(iter);   // iterate
     }
+    Py_DECREF(iter);
+
+    if (PyErr_Occurred())
+        // PyIter_Next() failed partway through (e.g. the set was mutated during iteration).
+        return NULL;
 
     Py_INCREF(retset);
     return retset;

@@ -2568,7 +2568,12 @@ bool Marshal::WriteLong(WriteStream *stream, PyObject *lng)
 
 	size_t nbytes = (nbits>>3)+1;
 	std::vector<unsigned char> buf(nbytes);
-	int i = _PyLong_AsByteArray((PyLongObject*)lng, &buf[0], nbytes, 1, 1);
+	// 3.13 adds a 6th parameter, with_exceptions: pass 1 to keep the pre-3.13 behaviour of
+	// always setting a Python exception on error. SaveObject() (below) returns NULL on a
+	// false WriteObject()/WriteLong() without setting its own exception, so something in the
+	// chain must have set one, or Python raises "SystemError: error return without exception
+	// set" instead of the real error.
+	int i = _PyLong_AsByteArray((PyLongObject*)lng, &buf[0], nbytes, 1, 1, 1);
 	if (i)
 		return false;
 	//the last byte may be redundant
