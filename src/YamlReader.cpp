@@ -52,7 +52,7 @@ YamlReader::YamlReader() :
 #ifdef _WIN32
 	,
 	m_locale( _create_locale( LC_ALL, "en_US" ) )
-#elif __APPLE__
+#else
 	,
 	m_locale( newlocale(LC_ALL_MASK, "C", 0 ) )
 #endif
@@ -384,7 +384,9 @@ void YamlReader::ReportWarning( const char* message ) const
 	else
 	{
 		std::string finalMessage = ConstructMessage( message );
-		CCP_LOGWARN( finalMessage.c_str() );
+		// A runtime string is not a format string: -Wformat-security rejects it, and any %% in
+		// the message would read arguments that were never passed.
+		CCP_LOGWARN( "%s", finalMessage.c_str() );
 	}
 }
 
@@ -487,6 +489,11 @@ void YamlReader::ReadValueImpl( T& dst )
 	{
 #ifdef _WIN32
 		dst = _atoi_l( (const char*)m_event->data.scalar.value, m_locale );
+#elif defined(__ANDROID__)
+		// bionic has no atoi_l/atof_l, and does not need them: its only numeric locale is C,
+		// which is exactly what m_locale is created with, so the plain call already gives the
+		// locale-independent parsing this class wants.
+		dst = atoi( (const char*)m_event->data.scalar.value );
 #else
 		dst = atoi_l( (const char*)m_event->data.scalar.value, m_locale );
 #endif
@@ -623,6 +630,11 @@ void YamlReader::ReadValue( double& dst )
 	{
 #ifdef _WIN32
 		dst = _atof_l( (const char*)m_event->data.scalar.value, m_locale );
+#elif defined(__ANDROID__)
+		// bionic has no atoi_l/atof_l, and does not need them: its only numeric locale is C,
+		// which is exactly what m_locale is created with, so the plain call already gives the
+		// locale-independent parsing this class wants.
+		dst = atof( (const char*)m_event->data.scalar.value );
 #else
 		dst = atof_l( (const char*)m_event->data.scalar.value, m_locale);
 #endif
@@ -679,6 +691,8 @@ void YamlReader::ReadFloatArray( float* values, size_t count )
 			{
 #ifdef _WIN32
 				values[i] = (float)_atof_l( (const char*)m_event->data.scalar.value, m_locale );
+#elif defined(__ANDROID__)
+				values[i] = (float)atof( (const char*)m_event->data.scalar.value );
 #else
 				values[i] = (float)atof_l( (const char*)m_event->data.scalar.value, m_locale );
 #endif

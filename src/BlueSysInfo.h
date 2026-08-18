@@ -52,6 +52,9 @@ public:
 	{
 		WINDOWS,
 		OSX,
+		// Not ANDROID: the NDK toolchain defines that as a macro on every compile line, so an
+		// enumerator of that name would be expanded to 1 before the compiler ever saw it.
+		ANDROID_OS,
 	};
 
 	enum Suite

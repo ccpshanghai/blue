@@ -788,7 +788,7 @@ IRootPtr BlueResMan::LoadObject(const wchar_t* unnormalizedName, Be::LOADOBJECT_
 	{
 		std::string msg;
 		builder->GetErrorMessage( msg );
-		CCP_LOGERR_CH( s_ch, msg.c_str() );
+		CCP_LOGERR_CH( s_ch, "%s", msg.c_str() );
 	}
 	return obj;
 }

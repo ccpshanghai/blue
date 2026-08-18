@@ -4,6 +4,9 @@
 #include "BlueSysInfo.h"
 #include "pdm.h"
 #include "pdm/protobuf.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "BlueMemStream.h"
 #ifdef _WIN32
 #include "win32.h"
@@ -401,7 +404,7 @@ BlueStdResult GetPDMByteData( IBlueStream** pdm_stream )
 	else
 	{
 		result = BlueStdResult( BLUE_STD_RESULT_IO_ERROR, "Failed to serialize pdm data" );
-		CCP_LOGERR_CH( s_ch, result.GetMessage() );
+		CCP_LOGERR_CH( s_ch, "%s", result.GetMessage() );
 	}
 
 	return result;

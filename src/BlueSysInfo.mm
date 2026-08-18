@@ -14,6 +14,10 @@
 #include <mach/clock.h>
 #include <mach/machine.h>
 #import <Foundation/Foundation.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#import <UIKit/UIKit.h>
+#endif
 
 
 namespace
@@ -100,6 +104,21 @@ uint64_t BlueSysInfo::GetProcessStartTime() const
 
 std::string BlueSysInfo::GetMachineUuid() const
 {
+#if TARGET_OS_IPHONE
+    // iOS deliberately exposes no hardware identifier -- the IORegistry path below needs
+    // IOKit APIs that are not available to apps, so there is no way to reproduce
+    // kIOPlatformUUIDKey. identifierForVendor is the sanctioned substitute, with two
+    // caveats the caller should know about: it is per-vendor rather than per-device, and it
+    // is regenerated when the last app from that vendor is uninstalled. Chosen knowingly as
+    // an experiment-grade stand-in; a Keychain-persisted UUID would survive reinstalls if
+    // this ever needs to be stable.
+    @autoreleasepool
+    {
+        NSUUID* uuid = [[UIDevice currentDevice] identifierForVendor];
+        // nil before first unlock on some OS versions.
+        return uuid ? std::string( [[uuid UUIDString] UTF8String] ) : std::string();
+    }
+#else
     char buffer[128];
     io_registry_entry_t ioRegistryRoot = IORegistryEntryFromPath(kIOMasterPortDefault, "IOService:/");
     CFStringRef uuidCf = (CFStringRef) IORegistryEntryCreateCFProperty(ioRegistryRoot, CFSTR(kIOPlatformUUIDKey), kCFAllocatorDefault, 0);
@@ -107,6 +126,7 @@ std::string BlueSysInfo::GetMachineUuid() const
     CFStringGetCString(uuidCf, buffer, sizeof( buffer ), kCFStringEncodingMacRoman);
     CFRelease(uuidCf);
     return buffer;
+#endif
 }
 
 std::wstring BlueSysInfo::GetMachineName() const

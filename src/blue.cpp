@@ -26,8 +26,11 @@ std::wstring s_logDeviceName( L"EVE" );
 #ifdef _WIN32
 #include "win32.h"
 static HINSTANCE s_instance = NULL;
-#elif defined(__APPLE__)
+#else
+// The POSIX branch below is no longer Apple-only. flock is the portable stand-in for the
+// BSD O_SHLOCK/O_EXLOCK open flags, which bionic does not provide.
 #include <fcntl.h>
+#include <sys/file.h>
 #endif
 
 // The templated container classes need special treatment here. Generally
@@ -167,7 +170,7 @@ HERR:
 		CloseHandle(h);
 	return 0;
 
-#elif defined(__APPLE__)
+#else
 	wchar_t* tmp = PyUnicode_AsWideCharString( ufn.o, nullptr );
 	if ( !tmp )
 	{
@@ -179,7 +182,18 @@ HERR:
 	long fileSize;
 	{
 		Ccp::PyAllowThreads _allow;
+#ifdef O_SHLOCK
         f = open( filenameStr, O_RDONLY | O_SHLOCK );
+#else
+        // No atomic open-and-lock on Linux, so take the shared lock straight after opening.
+        // The window between the two is the price; the alternative is no locking at all.
+        f = open( filenameStr, O_RDONLY );
+        if( f >= 0 && flock( f, LOCK_SH ) != 0 )
+        {
+            close( f );
+            f = -1;
+        }
+#endif
 		if( f >= 0 )
 		{
             fileSize = lseek( f, 0, SEEK_END );
@@ -209,8 +223,6 @@ HERR:
 	}
 	return r.Detach();
 
-#else
-#error PyAtomicFileRead implementation missing
 #endif
 }
 
@@ -278,14 +290,23 @@ HERR:
 		CloseHandle(h);
 	return 0;
 
-#elif defined(__APPLE__)
+#else
 
 	Py_UNICODE *fileName = PyUnicode_AsWideCharString(ufn, nullptr);
 	CW2A filenameStr( reinterpret_cast<const wchar_t*>( fileName ) );
 	int f;
 	{
 		Ccp::PyAllowThreads _allow;
+#ifdef O_EXLOCK
 		f = open( filenameStr, O_WRONLY | O_EXLOCK | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR );
+#else
+		f = open( filenameStr, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR );
+		if( f >= 0 && flock( f, LOCK_EX ) != 0 )
+		{
+			close( f );
+			f = -1;
+		}
+#endif
     }
     if( f < 0 )
     {
@@ -303,8 +324,6 @@ HERR:
 	}
 	Py_RETURN_NONE;
 
-#else
-#error PyAtomicFileWrite implementation missing
 #endif
 }
 

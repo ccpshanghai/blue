@@ -558,7 +558,10 @@ bool BlueNet::SendPacketToClientList( const unsigned long long* clientList,
 	{
 		TransportRepr *transport;
 		int num;
-		unsigned long long recipients[c_maxListLen];
+		// uint64_t, not unsigned long long: BitPacker declares its 64-bit overloads in the
+		// fixed-width spelling, and the two are different types wherever uint64_t is unsigned
+		// long (bionic on LP64), which makes every Pack call here ambiguous.
+		uint64_t recipients[c_maxListLen];
 	};
 
 	char headerData[sizeof(BlueNetHeader) + (sizeof(TempListNode) * 5) / 4];
@@ -1985,7 +1988,7 @@ void BlueNet::Route( BlueNetHeader* header,
 			int forkedCount = header->forkedAddresses; // preserve list but blank the header for retransmit
 			header->forkedAddresses = 0;
 
-			unsigned long long forkTargetClientID;
+			uint64_t forkTargetClientID;
 			for( int i=0; i<forkedCount; i++)
 			{
 				if ( !packer->Unpack(forkTargetClientID) )
