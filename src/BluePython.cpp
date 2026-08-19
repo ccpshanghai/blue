@@ -1279,7 +1279,11 @@ bool BluePyOS::DispatchEvent(
 	const char* eventName,
 	PyObject** pRetval,
 	const char* format,
-	va_list vargs,
+	// A pointer, not a va_list by value: callers with no arguments pass NULL here, and va_list
+	// is a struct on aarch64 Linux (a pointer type on Windows and Apple), so NULL does not
+	// convert. Only dereferenced where format is non-null, which is exactly when a caller
+	// supplied arguments.
+	va_list* vargs,
 	bool post
 	)
 {
@@ -1325,7 +1329,7 @@ bool BluePyOS::DispatchEvent(
 	// Cook up arguments
 	BluePy args;
 	if (format != NULL)
-		args = BluePy(Py_VaBuildValue((char*)format, vargs));
+		args = BluePy(Py_VaBuildValue((char*)format, *vargs));
 	else
 		args = BluePyTuple(0);
 	if (!args) {
@@ -1376,7 +1380,7 @@ bool BluePyOS::SendEvent(
 		va_list vargs;
 		va_start(vargs, format);
 		ret = DispatchEvent(
-			caller, context, eventName, pRetval, format, vargs, false);
+			caller, context, eventName, pRetval, format, &vargs, false);
 		va_end(vargs);
 		return ret;
 	}
@@ -1408,7 +1412,7 @@ bool BluePyOS::PostEvent(
 		va_list vargs;
 		va_start(vargs, format);
 		ret = DispatchEvent(
-			caller, context, eventName, NULL, format, vargs, true);
+			caller, context, eventName, NULL, format, &vargs, true);
 		va_end(vargs);
 		return ret;
 	}

@@ -74,7 +74,7 @@ Be::Result<std::string> YamlWriter::WriteObjectToStream( const IRoot* root, IBlu
 		res = yaml_emitter_emit( &emitter, event );
 		if( !res )
 		{
-			CCP_LOGERR( emitter.problem );
+			CCP_LOGERR( "%s", emitter.problem );
 			yaml_emitter_flush( &emitter );
 		}
 	}

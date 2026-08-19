@@ -29,10 +29,11 @@ void* MeasuredMalloc( void* ctx, size_t size )
 	auto ret = _this->allocator.malloc( _this->allocator.ctx, size );
 #if _WIN32
 	_this->measurement.Add( int64_t( size ) );
-#elif __APPLE__
-	_this->measurement.Add( int64_t( CCPMSize( ret ) ) );
 #else
-#error "Unsupported platform"
+	// Was #elif __APPLE__ with an #error for everything else. CCPMSize is a carbon-core API
+	// available on every platform it builds for, so the real rule is that Windows counts the
+	// requested size and everyone else asks the allocator what it actually handed out.
+	_this->measurement.Add( int64_t( CCPMSize( ret ) ) );
 #endif
 	return ret;
 }
@@ -43,10 +44,11 @@ void* MeasuredCalloc( void* ctx, size_t nelem, size_t size )
 	auto ret = _this->allocator.calloc( _this->allocator.ctx, nelem, size );
 #if _WIN32
 	_this->measurement.Add( int64_t( nelem * size ) );
-#elif __APPLE__
-	_this->measurement.Add( int64_t( CCPMSize( ret ) ) );
 #else
-#error "Unsupported platform"
+	// Was #elif __APPLE__ with an #error for everything else. CCPMSize is a carbon-core API
+	// available on every platform it builds for, so the real rule is that Windows counts the
+	// requested size and everyone else asks the allocator what it actually handed out.
+	_this->measurement.Add( int64_t( CCPMSize( ret ) ) );
 #endif
 	return ret;
 }
@@ -58,10 +60,11 @@ void* MeasuredRealloc( void* ctx, void* ptr, size_t newSize )
 	auto ret = _this->allocator.realloc( _this->allocator.ctx, ptr, newSize );
 #if _WIN32
 	_this->measurement.Add( int64_t( newSize - prev ) );
-#elif __APPLE__
-	_this->measurement.Add( int64_t( CCPMSize( ret ) - prev ) );
 #else
-#error "Unsupported platform"
+	// Was #elif __APPLE__ with an #error for everything else. CCPMSize is a carbon-core API
+	// available on every platform it builds for, so the real rule is that Windows counts the
+	// requested size and everyone else asks the allocator what it actually handed out.
+	_this->measurement.Add( int64_t( CCPMSize( ret ) - prev ) );
 #endif
 	return ret;
 }

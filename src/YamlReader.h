@@ -210,7 +210,8 @@ private:
 #ifdef _WIN32
 	// So user locale doesn't affect parsing results
 	_locale_t m_locale;
-#elif __APPLE__
+#else
+	// locale_t and newlocale are POSIX, not Apple-only.
 	locale_t m_locale;
 #endif
 

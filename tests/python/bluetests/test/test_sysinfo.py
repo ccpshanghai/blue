@@ -98,6 +98,12 @@ class TestSysInfo(unittest.TestCase):
         self.assertLess(start, now)
         self.assertLess(now - start, 10 * 60 * 60)
 
+    @unittest.skipIf(
+        sys.platform == 'android',
+        'Android exposes no device identifier to native code, so machineUuid is empty by '
+        'design: ro.serialno became privileged in Android 10, and ANDROID_ID needs a JNI '
+        'round trip through Settings.Secure and is per-signing-key rather than per-device. '
+        'iOS is not skipped -- identifierForVendor gives a real UUID there.')
     def testMachineUuidIsNotEmpty(self):
         self.assertNotEqual(blue.sysinfo.machineUuid, '')
 

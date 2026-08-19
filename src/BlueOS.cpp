@@ -4,6 +4,10 @@
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <cstdio>
+#endif
 #endif
 
 #include <inttypes.h>
@@ -345,6 +349,11 @@ void BlueOS::UnregisterForTicks( IBlueEvents *cb, void* cookie )
 }
 
 
+// Defining this ourselves hijacks CPython fatal-error handling, which the linker tolerates
+// against a shared libpython. iOS links libpython3.13.a statically, so both definitions land in
+// one link and ld reports a duplicate symbol. Letting CPython handle it costs the CCP_LOGERR
+// line, and is arguably better there: SIGKILL below yields no crash report on iOS, abort does.
+#if !TARGET_OS_IPHONE
 void _Py_FatalErrorFunc( const char* _func, const char* msg )
 {
 	CCP_LOGERR_CH( s_chOS, "Py_FatalError: %s", msg );
@@ -357,6 +366,7 @@ void _Py_FatalErrorFunc( const char* _func, const char* msg )
 	__builtin_unreachable();
 #endif
 }
+#endif // !TARGET_OS_IPHONE
 
 //--------------------------------------------------------------------
 // Frame rate is capped at ~100 max frames per second (10ms per frame).
@@ -1195,7 +1205,7 @@ void BlueOS::SetError( long error,	const Be::Clsid* reporter, const char* format
         err.mOsError = errno;
 #endif
 		BlueOsError winerr( err.mOsError );
-		CCP_LOGERR( winerr );
+		CCP_LOGERR( "%s", (const char*)winerr );
 	}
 
 	err.mSource = reporter;
@@ -2055,8 +2065,14 @@ PyObject* BlueOS::PyShellExecute(PyObject* args)
 	}
 #else
 	std::string file_utf8{WideToUTF8( file )};
+#if TARGET_OS_IPHONE
+    // `system` is unavailable in the iOS SDK -- no shell to hand "open <path>" to, and
+    // -[UIApplication openURL:] is async, takes a URL, and is unreachable from plain C++.
+    (void)file_utf8;
+#else
     std::string command = "open " + file_utf8;
     system( command.c_str() );
+#endif
 #endif
 	Py_INCREF(Py_None);
 	return Py_None;
@@ -2223,9 +2239,16 @@ void BlueOS::ShowErrorMessageBox( const wchar_t* title, const wchar_t* message )
     CFStringRef titleRef = CFStringCreateWithBytes( nullptr, reinterpret_cast<const UInt8*>( title ), wcslen( title ) * sizeof( wchar_t ), encoding, false );
     CFStringRef messageRef = CFStringCreateWithBytes( nullptr, reinterpret_cast<const UInt8*>( message ), wcslen( message ) * sizeof( wchar_t ), encoding, false );
 
+#if TARGET_OS_IPHONE
+    // No CFUserNotification on iOS and no synchronous modal alert reachable from here, so the
+    // message goes to stderr, which the device console captures. Note it no longer blocks.
+    fprintf( stderr, "%s: %s\n", WideToUTF8( std::wstring( title ) ).c_str(),
+                                 WideToUTF8( std::wstring( message ) ).c_str() );
+#else
     CFOptionFlags result;  //result code from the message box
 
     CFUserNotificationDisplayAlert( 0, kCFUserNotificationStopAlertLevel, nullptr, nullptr, nullptr, titleRef, messageRef, nullptr, nullptr, nullptr, &result );
+#endif
 
 	CFRelease( titleRef );
 	CFRelease( messageRef );

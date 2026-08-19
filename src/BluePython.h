@@ -344,7 +344,10 @@ public:
 		const char* eventName,
 		PyObject** pRetval,
 		const char* format,
-		va_list vargs,
+		// Pointer rather than by value: callers with no arguments pass NULL, and va_list is a
+		// struct on aarch64 Linux while it is a pointer type on Windows and Apple, so NULL does
+		// not convert there. Dereferenced only when format is non-null.
+		va_list* vargs,
 		bool post );
 
 	bool SendEvent(

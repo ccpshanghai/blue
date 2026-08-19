@@ -80,6 +80,7 @@ ccp_add_library(Blue SHARED
     src/BlueClipboard.cpp
     src/BlueClipboard.h
     src/BlueClipboard.mm
+    src/BlueClipboardAndroid.cpp
     src/BlueClipboard_Blue.cpp
     src/BlueEventToPython.cpp
     src/BlueEventToPython.h
@@ -152,6 +153,7 @@ ccp_add_library(Blue SHARED
     src/BlueStreamMethods.cpp
     src/BlueSysInfo.cpp
     src/BlueSysInfo.h
+    src/BlueSysInfoAndroid.cpp
     src/BlueSysInfo_Blue.cpp
     src/BlueTestHelpers.cpp
     src/BlueTestHelpers.h
@@ -264,6 +266,19 @@ target_sources(Blue PRIVATE
 )
 
 option(PY27_COMPATIBILITY_MODE "Enable Python2.7 compatibility mode" OFF)
+if(NOT APPLE)
+    # These are Objective-C++ and wholly guarded by #if __APPLE__, so they contribute
+    # nothing off Apple -- but they are still compiled as ObjC++, and the precompiled
+    # header below is plain C++, which fails with "Objective-C was disabled in PCH file
+    # but is currently enabled" on Android. Drop them from the build instead.
+    set_source_files_properties(
+        src/BlueSysInfo.mm
+        src/BlueClipboard.mm
+        src/BlueOS.mm
+        PROPERTIES HEADER_FILE_ONLY ON
+    )
+endif()
+
 target_precompile_headers(Blue PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/StdAfx.h)
 
 target_compile_definitions(Blue
@@ -272,10 +287,23 @@ target_compile_definitions(Blue
         $<$<BOOL:${PY27_COMPATIBILITY_MODE}>:PY27_COMPATIBILITY_MODE> # This define should get cleaned up when we stop supporting running the cluster with Python 27 and Python 312 nodes working together.
 )
 
+if(ANDROID)
+    # liblog is part of the platform, always present, and is what protobuf's Android logging
+    # path needs -- see the note in the fork's patch for why it is declared here and not there.
+    target_link_libraries(Blue PRIVATE log)
+endif()
+
 if(APPLE)
     enable_language(OBJCXX)
     target_compile_definitions(Blue PRIVATE PORTING_TO_LINUX)
-    target_link_libraries(Blue PRIVATE "-framework SystemConfiguration -framework Foundation -framework IOKit -framework AppKit")
+    if(IOS)
+        # AppKit does not ship in the iOS SDK. UIKit is its counterpart, and it is also what
+        # BlueClipboard UIPasteboard path needs. SystemConfiguration, Foundation and IOKit
+        # are all present in the iOS SDK, so this one framework is the only difference.
+        target_link_libraries(Blue PRIVATE "-framework SystemConfiguration -framework Foundation -framework IOKit -framework UIKit")
+    else()
+        target_link_libraries(Blue PRIVATE "-framework SystemConfiguration -framework Foundation -framework IOKit -framework AppKit")
+    endif()
 endif()
 
 get_target_property(CARBONIO_INCLUDE_DIR _socket INTERFACE_INCLUDE_DIRECTORIES)

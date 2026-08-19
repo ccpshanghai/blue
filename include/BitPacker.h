@@ -566,7 +566,7 @@ bool BitPackerCore::Pack( const uint64_t value )
 	{
 		for( ; j<7 ; j++ )
 		{
-			if ( value < (unsigned long long)(0x1LL << (j*5)) )
+			if ( value < (uint64_t)(0x1LL << (j*5)) )
 			{
 				QueueBits( (char*)&j, 3 );
 				QueueBits( (char*)&value, (int)(j*5) );
@@ -587,7 +587,7 @@ bool BitPackerCore::Pack( const int64_t value )
 	if ( value == 0 )
 	{
 		QueueBits( (char*)&value, 1 );
-		Pack( 0ULL );
+		Pack( (uint64_t)0 );
 	}
 	else if ( value > 0 )
 	{
@@ -765,7 +765,7 @@ bool BitPackerCore::Pack( const double value )
 //------------------------------------------------------------------------------
 bool BitPackerCore::Pack( const double value, unsigned int places )
 {
-	unsigned long long val = 0;
+	uint64_t val = 0;
 	if ( value == 0 )
 	{
 		QueueBits( (char*)&val, 1 );
@@ -775,7 +775,7 @@ bool BitPackerCore::Pack( const double value, unsigned int places )
 	val = 1;
 	QueueBits( (char*)&val, 1 );
 
-	val = (unsigned long long)(value * (double)(1UL<<places));
+	val = (uint64_t)(value * (double)(1UL<<places));
 	return Pack( val );
 }
 
@@ -822,7 +822,12 @@ bool BitPackerCore::Unpack( int &value )
 }
 
 //------------------------------------------------------------------------------
-bool BitPackerCore::Unpack( unsigned long long &value )
+// The declarations above use uint64_t and int64_t; these definitions and locals spelled the
+// same types as unsigned long long / long long. Identical on Windows and Apple, where
+// uint64_t IS unsigned long long -- but under bionic on LP64 uint64_t is unsigned long, so
+// the definitions matched no declaration and every 64-bit Pack/Unpack call became
+// ambiguous. Spelling them the same way as the declarations is correct on every platform.
+bool BitPackerCore::Unpack( uint64_t &value )
 {
 	value = 0;
 	DeQueueBits( (char*)&value, 3 );
@@ -836,18 +841,18 @@ bool BitPackerCore::Unpack( unsigned long long &value )
 }
 
 //------------------------------------------------------------------------------
-bool BitPackerCore::Unpack( long long &value )
+bool BitPackerCore::Unpack( int64_t &value )
 {
 	value = 0;
 	DeQueueBits( (char *)&value, 1 );
 	if ( value )
 	{
-		Unpack( (unsigned long long&)value );
+		Unpack( (uint64_t&)value );
 		value = -value;
 	}
 	else
 	{
-		Unpack( (unsigned long long&)value );
+		Unpack( (uint64_t&)value );
 	}
 
 	return Valid();
@@ -1020,7 +1025,7 @@ bool BitPackerCore::Unpack( double &value )
 //------------------------------------------------------------------------------
 bool BitPackerCore::Unpack( double &value, unsigned int places )
 {
-	unsigned long long val = 0;
+	uint64_t val = 0;
 	DeQueueBits( (char*)&val, 1 );
 
 	if ( val == 0 )

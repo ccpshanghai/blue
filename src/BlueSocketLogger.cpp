@@ -4,15 +4,18 @@
 #include "BlueSocketLogger.h"
 #ifndef _WIN32
 #include <sys/time.h>
+// The BSD socket headers are POSIX, not Apple-specific -- they used to sit in the __APPLE__
+// block below, which left Android without AF_INET, sockaddr_in, htons or shutdown. The two
+// genuinely Apple-only headers stay where they are: bionic has no sys/sysctl.h at all.
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #else
 #include <WS2tcpip.h>
 #endif
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #include <mach-o/dyld.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #endif
 
 namespace

@@ -10,6 +10,12 @@
 #if _WIN32
 #include "WinNls.h"
 #endif
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 static const std::wstring languageArgName = L"language";
 
@@ -265,6 +271,17 @@ std::string GetOSLanguageCode()
 	CFRelease( langs );
 
 	return *result;
+#elif defined(__ANDROID__)
+	// persist.sys.locale is the user selected locale, ro.product.locale the factory default.
+	// The exact spelling need not match a string-table key: GetByID falls back to the English
+	// original on a miss, so a wrong or empty code degrades to untranslated text rather than
+	// to the wrong language.
+	char buffer[PROP_VALUE_MAX] = { 0 };
+	if( __system_property_get( "persist.sys.locale", buffer ) <= 0 )
+	{
+		__system_property_get( "ro.product.locale", buffer );
+	}
+	return buffer;
 #else
 #error Unsupported platform!
 #endif
@@ -329,6 +346,10 @@ void BlueShowInvalidOSVersionError()
 	std::string localizedMessage = TranslateErrorMessage( "Windows 10 or higher required", IDS_INVALIDWINDOWS );
 #elif __APPLE__
 	std::string localizedMessage = TranslateErrorMessage( "Invalid macOS version", IDS_INVALIDMACOS );
+#elif defined(__ANDROID__)
+	// No IDS_ id for this yet, and 0 is not a key in any string table, so GetByID hands back
+	// the English original. Add a proper id here if Android ever needs this localised.
+	std::string localizedMessage = TranslateErrorMessage( "Unsupported OS version", 0 );
 #else
 	#error Unsupported platform!
 #endif
@@ -354,8 +375,14 @@ void DisplayErrorMessageBox( const char* title, const char* message )
 
 	CCP_LOG( "Message %s", message );
 
+#if !TARGET_OS_IPHONE
 	CFOptionFlags result; // result code from the message box
 	CFUserNotificationDisplayAlert( 0, kCFUserNotificationStopAlertLevel, nullptr, nullptr, nullptr, titleRef, messageRef, nullptr, nullptr, nullptr, &result );
+#else
+	// CFUserNotification is macOS-only and iOS has no synchronous modal alert reachable from
+	// arbitrary code. The CCP_LOG above already records the message, so iOS loses the dialog
+	// and keeps the diagnostic.
+#endif
 
 	if( titleRef )
 	{
@@ -365,6 +392,11 @@ void DisplayErrorMessageBox( const char* title, const char* message )
 	{
 		CFRelease( messageRef );
 	}
+#elif defined(__ANDROID__)
+	// Nothing a plain native library can raise as a dialog here. The CCP_LOG in the Apple
+	// branch above is inside that branch, so without this line the message would vanish
+	// entirely on Android. A UI-layer callback is the real answer if it must be visible.
+	CCP_LOG( "Message %s", message );
 #else
 #error Unsupported platform!
 #endif

@@ -162,6 +162,17 @@ static PyObject *PyGetExeFilePids( PyObject* self, PyObject* args)
 
     return list;
 }
+#else
+static PyObject *PyGetExeFilePids( PyObject* self, PyObject* args)
+{
+	// Neither the Windows nor the macOS implementation applies here. Android can read /proc
+	// but not other processes executable paths, which is what this call is for, so there is
+	// nothing to enumerate. The method table below references this unconditionally, so a stub
+	// has to exist -- it raises rather than returning an empty list, so a caller that depends
+	// on the answer fails loudly instead of silently seeing no other instances.
+	PyErr_SetString( PyExc_NotImplementedError, "GetExeFilePids is not available on this platform" );
+	return nullptr;
+}
 #endif
 #endif
 
