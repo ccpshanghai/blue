@@ -83,7 +83,7 @@ YamlReader::~YamlReader()
 	}
 #ifdef _WIN32
 	_free_locale( m_locale );
-#elif __APPLE__
+#else
 	freelocale( m_locale );
 #endif
 }

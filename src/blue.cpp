@@ -170,7 +170,7 @@ HERR:
 		CloseHandle(h);
 	return 0;
 
-#else
+#elif defined(__APPLE__) || defined(__ANDROID__)
 	wchar_t* tmp = PyUnicode_AsWideCharString( ufn.o, nullptr );
 	if ( !tmp )
 	{
@@ -223,6 +223,8 @@ HERR:
 	}
 	return r.Detach();
 
+#else
+#error PyAtomicFileRead implementation missing
 #endif
 }
 
