@@ -29,8 +29,12 @@
 #include <cstring>
 #include <thread>
 
+#include <cerrno>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/system_properties.h>
+
+static CcpLogChannel_t s_androidCh = CCP_LOG_DEFINE_CHANNEL( "BlueSysInfoAndroid" );
 
 namespace
 {
@@ -107,14 +111,40 @@ std::wstring BlueSysInfo::GetSharedApplicationDataDirectory() const
 	return GetUserApplicationDataDirectory();
 }
 
-// App-scoped, not the user-visible /sdcard/Documents: that one needs READ_EXTERNAL_STORAGE
-// below API 30 and MANAGE_EXTERNAL_STORAGE above it, so returning it would hand the caller a
-// path it cannot open. The framework does not create this directory -- but neither does the
-// macOS body, which passes create:false.
+// App-scoped, not the user-visible /sdcard/Documents: that one is shared storage, needs
+// READ_EXTERNAL_STORAGE below API 30 and MANAGE_EXTERNAL_STORAGE above it, and Play restricts
+// the latter -- returning it would hand the caller a path it cannot open. Nothing on a modern
+// Android is both app-private and user-visible (Android 11 closed Android/data to the Files
+// app and to SAF), and app-private is the half that iOS's sandbox Documents keeps.
+//
+// This creates the directory, which is the one place these getters have a side effect. It is
+// deliberate. Measured on an iOS 17 simulator: NSDocumentDirectory resolves to
+// <container>/Documents, which exists and is writable because the OS creates it with the app
+// container. Android's framework creates files/ but stops there, so without this the caller
+// gets a path it must mkdir first -- and blue's own test_sysinfo.py asserts the directory
+// exists and is writable. Android's own documents API has the same semantics:
+// Context.getExternalFilesDir( DIRECTORY_DOCUMENTS ) creates what it returns.
 std::wstring BlueSysInfo::GetUserDocumentsDirectory() const
 {
 	auto base = GetAppDataDirectory();
-	return base.empty() ? std::wstring() : Widen( base + "/files/Documents" );
+	if( base.empty() )
+	{
+		return {};
+	}
+
+	auto path = base + "/files/Documents";
+
+	// 0700 because this is app-private storage; the app is the only uid that should reach it.
+	// EEXIST is the normal case from the second call onwards. Anything else is worth a line in
+	// the log but is not worth withholding the path: where documents belong is still the right
+	// answer even when creating the directory failed, and the caller will find out when it
+	// tries to write.
+	if( mkdir( path.c_str(), 0700 ) != 0 && errno != EEXIST )
+	{
+		CCP_LOGERR_CH( s_androidCh, "could not create %s (errno %d)", path.c_str(), errno );
+	}
+
+	return Widen( path );
 }
 
 // Android keeps one font directory and it is read-only. macOS distinguishes /Library/Fonts
