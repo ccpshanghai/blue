@@ -13,7 +13,7 @@
 #include "IBluePaths.h"
 #include "IBlueObjectMetadata.h"
 #include <Scheduler.h>
-#if __APPLE__ || __ANDROID__
+#if __APPLE__ || __linux__
 #include <locale>
 #include <codecvt>
 #elif _WIN32
@@ -494,10 +494,9 @@ void YamlReader::ReadValueImpl( T& dst )
 	{
 #ifdef _WIN32
 		dst = _atoi_l( (const char*)m_event->data.scalar.value, m_locale );
-#elif defined(__ANDROID__)
-		// bionic has no atoi_l/atof_l, and does not need them: its only numeric locale is C,
-		// which is exactly what m_locale is created with, so the plain call already gives the
-		// locale-independent parsing this class wants.
+#elif defined(__linux__)
+		// bionic has no atoi_l/atof_l, and glibc does not either. The locale created above
+		// is C on both, which is what the plain call already parses with.
 		dst = atoi( (const char*)m_event->data.scalar.value );
 #else
 		dst = atoi_l( (const char*)m_event->data.scalar.value, m_locale );
@@ -635,10 +634,9 @@ void YamlReader::ReadValue( double& dst )
 	{
 #ifdef _WIN32
 		dst = _atof_l( (const char*)m_event->data.scalar.value, m_locale );
-#elif defined(__ANDROID__)
-		// bionic has no atoi_l/atof_l, and does not need them: its only numeric locale is C,
-		// which is exactly what m_locale is created with, so the plain call already gives the
-		// locale-independent parsing this class wants.
+#elif defined(__linux__)
+		// bionic has no atoi_l/atof_l, and glibc does not either. The locale created above
+		// is C on both, which is what the plain call already parses with.
 		dst = atof( (const char*)m_event->data.scalar.value );
 #else
 		dst = atof_l( (const char*)m_event->data.scalar.value, m_locale);
@@ -696,7 +694,7 @@ void YamlReader::ReadFloatArray( float* values, size_t count )
 			{
 #ifdef _WIN32
 				values[i] = (float)_atof_l( (const char*)m_event->data.scalar.value, m_locale );
-#elif defined(__ANDROID__)
+#elif defined(__linux__)
 				values[i] = (float)atof( (const char*)m_event->data.scalar.value );
 #else
 				values[i] = (float)atof_l( (const char*)m_event->data.scalar.value, m_locale );
