@@ -33,7 +33,9 @@ extern "C"
 	BLUEIMPORT void BlueShowError();
 	BLUEIMPORT void BlueSetCrashReporter( ICrashReporter* crashReporter );
 	BLUEIMPORT void BlueLogFuncChannel( CcpLogChannel_t& logObject, CCP::LogType type, unsigned long userData, const char* format, va_list args );
+#if BLUE_WITH_PYTHON
 	BLUEIMPORT void BlueGetInitTab( std::vector<_inittab>& inittab );
+#endif
 	BLUEIMPORT bool BlueConstructPathListFromManifest( std::vector<std::wstring>& pathlist, bool verifyManifest );
 	BLUEIMPORT void BlueResolvePathForWritingW( const std::wstring& path, std::wstring& resolved );
 	BLUEIMPORT void BlueSetStartupArgs( const std::vector<std::wstring>& args );

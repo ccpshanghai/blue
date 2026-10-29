@@ -218,7 +218,9 @@ BLUE_INTERFACE(IBlueOS) : public IRoot
 	// Returns true if <arg> is in the list of command line arguments.
 	virtual bool HasStartupArg( const std::wstring& arg ) const = 0;
 
+#if BLUE_WITH_PYTHON
 	virtual void GetInitTab( std::vector<_inittab>& tabs ) const = 0;
+#endif
 
 	// Returns the value associated with the command line argument.
 	// If /arg=value is on the command line, this method returns value.

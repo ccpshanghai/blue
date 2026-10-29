@@ -2333,6 +2333,7 @@ bool BlueOS::ConstructPathListFromManifest(std::vector<std::wstring>& pathlist, 
 	return true;
 }
 
+#if BLUE_WITH_PYTHON
 extern "C" PyObject* CCP_CONCATENATE( PyInit_blue, CCP_BUILD_FLAVOR )( void );
 
 void BlueOS::GetInitTab( std::vector<_inittab>& tabs ) const
@@ -2340,6 +2341,7 @@ void BlueOS::GetInitTab( std::vector<_inittab>& tabs ) const
 	tabs.push_back( { g_moduleName, CCP_CONCATENATE( PyInit_blue, CCP_BUILD_FLAVOR ) } );
 	tabs.push_back( { nullptr, nullptr } );
 }
+#endif
 
 
 #ifdef OptimizeOff

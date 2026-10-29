@@ -324,7 +324,9 @@ public:
 
 	bool ConstructPathListFromManifest( std::vector<std::wstring>& pathlist, bool verifyManifest ) override;
 	void SetMarkupZonesInPython( bool markupZonesInPython ) override;
+#if BLUE_WITH_PYTHON
 	void GetInitTab( std::vector<_inittab>& tabs ) const override;
+#endif
 
 private:
     void PumpOSInternal();

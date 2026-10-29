@@ -552,10 +552,12 @@ bool BlueIsPackaged()
 	return BeOS->IsPackaged();
 }
 
+#if BLUE_WITH_PYTHON
 void BlueGetInitTab( std::vector<_inittab>& inittab )
 {
 	BeOS->GetInitTab( inittab );
 }
+#endif
 
 bool BlueConstructPathListFromManifest( std::vector<std::wstring>& pathList, bool verifyManifest )
 {
