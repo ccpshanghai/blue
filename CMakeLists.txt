@@ -11,7 +11,15 @@ include(cmake/CcpBuildConfigurations.cmake)
 
 find_package(carbon-core REQUIRED CONFIG)
 find_package(carbon-blueexposure REQUIRED CONFIG)
-find_package(carbon-io REQUIRED CONFIG)
+# blue follows the script backends carbon-blueexposure was built with. Packages that predate
+# the backend flags are Python-only.
+if(NOT DEFINED CARBON_BLUEEXPOSURE_WITH_PYTHON)
+    set(CARBON_BLUEEXPOSURE_WITH_PYTHON ON)
+endif()
+if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+    # carbon-io and carbon-scheduler are Python extension modules (they link Python3::Python)
+    find_package(carbon-io REQUIRED CONFIG)
+endif()
 find_package(CURL REQUIRED CONFIG)
 # libyaml installs yamlConfig.cmake. Windows finds YAMLConfig.cmake because
 # the filesystem is case-insensitive. Linux does not.
@@ -21,10 +29,15 @@ else()
     find_package(YAML REQUIRED CONFIG)
 endif()
 find_package(zlib CONFIG REQUIRED)
-find_package(carbon-scheduler REQUIRED CONFIG)
+if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+    find_package(carbon-scheduler REQUIRED CONFIG)
+endif()
 find_package(OpenSSL COMPONENTS Crypto SSL REQUIRED)
 find_package(carbon-pdmprotowrapper REQUIRED CONFIG)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+    # Only the Python test discovery below needs the interpreter
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+endif()
 
 
 set(PUBLIC_HEADER_FILES_INCLUDE
@@ -291,7 +304,8 @@ target_precompile_headers(Blue PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/StdAfx.h)
 
 target_compile_definitions(Blue
     PUBLIC
-        CCP_STACKLESS
+        # Stackless tasklets exist only with the Python backend
+        $<$<BOOL:${CARBON_BLUEEXPOSURE_WITH_PYTHON}>:CCP_STACKLESS>
         $<$<BOOL:${PY27_COMPATIBILITY_MODE}>:PY27_COMPATIBILITY_MODE> # This define should get cleaned up when we stop supporting running the cluster with Python 27 and Python 312 nodes working together.
 )
 
@@ -314,8 +328,10 @@ if(APPLE)
     endif()
 endif()
 
-get_target_property(CARBONIO_INCLUDE_DIR _socket INTERFACE_INCLUDE_DIRECTORIES)
-target_include_directories(Blue PRIVATE ${CARBONIO_INCLUDE_DIR})
+if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+    get_target_property(CARBONIO_INCLUDE_DIR _socket INTERFACE_INCLUDE_DIRECTORIES)
+    target_include_directories(Blue PRIVATE ${CARBONIO_INCLUDE_DIR})
+endif()
 
 target_link_libraries(Blue
     PUBLIC
@@ -343,7 +359,9 @@ if(WIN32)
     )
 endif()
 
-get_target_property(SCHEDULER_INCLUDE_DIR Scheduler INTERFACE_INCLUDE_DIRECTORIES)
+if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+    get_target_property(SCHEDULER_INCLUDE_DIR Scheduler INTERFACE_INCLUDE_DIRECTORIES)
+endif()
 target_include_directories(Blue
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -360,6 +378,11 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     option(BUILD_TESTING "Build tests. Enabled by default." ON)
     if(BUILD_TESTING)
         include(CTest)
+    endif()
+    if(BUILD_TESTING AND NOT CARBON_BLUEEXPOSURE_WITH_PYTHON)
+        # The gtest suite embeds a Python interpreter and the rest runs through exefile
+        message(STATUS "Not building blue's tests: they all need the Python backend")
+    elseif(BUILD_TESTING)
         add_subdirectory(tests)
 
         # discover python tests ... this may be a little bit brittle since we're working around the missing `_blueexposuretest`
@@ -407,6 +430,11 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         endif()
 
         separate_arguments(PYTHON_TESTS UNIX_COMMAND ${PYTHON_TESTS_STR})
+        if(NOT WIN32 AND NOT APPLE)
+            list(LENGTH PYTHON_TESTS PYTHON_TEST_COUNT)
+            message(STATUS "Not registering ${PYTHON_TEST_COUNT} Python tests: their exefile environment is only set up for Windows and macOS")
+            set(PYTHON_TESTS "")
+        endif()
         foreach(PYTHON_TEST ${PYTHON_TESTS})
             message(STATUS "Found test ${PYTHON_TEST}")
             add_test(NAME ${PYTHON_TEST}
@@ -442,7 +470,9 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
                 DEPENDENCIES "BlueExposure;CURL;OpenSSL;PDM;YAML;ZLIB"
         )
         install(FILES ${CMAKE_CURRENT_BINARY_DIR}/BlueConfig.cmake DESTINATION .)
-        install(DIRECTORY python DESTINATION . FILES_MATCHING PATTERN "*.py")
+        if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+            install(DIRECTORY python DESTINATION . FILES_MATCHING PATTERN "*.py")
+        endif()
     else ()
         install(
                 TARGETS Blue
@@ -459,7 +489,9 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         )
 
         install(FILES carbon-blueConfig.cmake DESTINATION ${CMAKE_INSTALL_PREFIX}/share/carbon-blue)
-        install(DIRECTORY python/bluepycore DESTINATION bin/python)
+        if(CARBON_BLUEEXPOSURE_WITH_PYTHON)
+            install(DIRECTORY python/bluepycore DESTINATION bin/python)
+        endif()
     endif ()
 
     install(DIRECTORY include DESTINATION . FILES_MATCHING PATTERN "*.h")
