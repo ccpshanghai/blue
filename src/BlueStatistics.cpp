@@ -155,7 +155,10 @@ void BlueStatistics::StartTelemetry( const std::string& server )
 void TelemetryEventHandler( CcpTelemetryEvent event, void* userdata )
 {
 	if ( event == CCP_TELEMETRY_STARTED && s_isTelemetryPythonCaptureEnabled ) {
+#if BLUE_WITH_PYTHON
+		// Python-only: capturing Python calls in telemetry
 		PyEval_SetProfile( &PythonProfiler, nullptr );
+#endif
 	}
 }
 
@@ -200,7 +203,9 @@ void BlueStatistics::ResumeTelemetry()
 
 void BlueStatistics::StopTelemetry()
 {
+#if BLUE_WITH_PYTHON
 	PyEval_SetProfile( nullptr, nullptr );
+#endif
 	CcpUnregisterTelemetryEventHandler( TelemetryEventHandler, nullptr );
 	CcpStopTelemetry();
 }

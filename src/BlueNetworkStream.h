@@ -19,7 +19,9 @@ public:
 
 	BlueStdResult Open( const char* url );
 	void Close();
+#if BLUE_WITH_PYTHON
 	BlueStdResult ReadData( Be::Optional<size_t> size, PyObject*& contents );
+#endif
 	BlueStdResult Tell( ptrdiff_t& position );
 
 	/////////////////////////////////////////

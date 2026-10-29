@@ -182,7 +182,10 @@ const Be::ClassInfo* BlueSysInfoNetworkAdapter::ExposeToBlue()
 		MAP_INTERFACE( BlueSysInfoNetworkAdapter )
 
 		MAP_ATTRIBUTE( "name", m_name, "Name given to the adapter", Be::READ );
+#if BLUE_WITH_PYTHON
+		// Python-only: macAddress holds Python bytes
 		MAP_ATTRIBUTE( "macAddress", m_macAddress, "Adapter MAC address in binary format", Be::READ );
+#endif
 		MAP_ATTRIBUTE( "macAddressString", m_macAddressString, "Adapter MAC address in human readable format", Be::READ );
 		MAP_ATTRIBUTE( "uuid", m_uuid, "Adapter UUID, which can be empty", Be::READ );
 	EXPOSURE_END()

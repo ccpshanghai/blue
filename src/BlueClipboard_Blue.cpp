@@ -15,6 +15,8 @@ BlueClipboard& BlueClipboard::GetInstance()
 	return s_blueClipboard;
 }
 
+#if BLUE_WITH_PYTHON
+// Python-only: the clipboard script methods (their mappings below are Python-only too)
 PyObject* BlueClipboard::PyGetString() const
 {
 	std::string str;
@@ -72,6 +74,7 @@ PyObject* BlueClipboard::PySetData( PyObject* data )
         PyErr_SetString( PyExc_OSError, "failed to write data to clipboard" );
 	return nullptr;
 }
+#endif
 
 
 

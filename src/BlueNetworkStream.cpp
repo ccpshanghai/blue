@@ -172,6 +172,7 @@ bool BlueNetworkStream::UnlockData()
 	return false;
 }
 
+#if BLUE_WITH_PYTHON
 BlueStdResult BlueNetworkStream::ReadData( Be::Optional<size_t> size, PyObject*& contents )
 {
 	if( m_state == UNINITIALIZED )
@@ -217,6 +218,7 @@ BlueStdResult BlueNetworkStream::ReadData( Be::Optional<size_t> size, PyObject*&
 		return BlueStdResult( BLUE_STD_RESULT_OK );
 	}
 }
+#endif
 
 BlueStdResult BlueNetworkStream::Tell( ptrdiff_t& position )
 {

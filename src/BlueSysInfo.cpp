@@ -25,7 +25,10 @@ BlueSysInfoTaskTimesPtr BlueSysInfo::GetProcessTimes() const
 	int64_t kernelTime, userTime;
 	if( !CcpGetProcessTimes( kernelTime, userTime ) )
 	{
+#if BLUE_WITH_PYTHON
+		// Python-only: the OSError; without Python the caller only gets null
 		PyErr_SetString( PyExc_OSError, "Failed to get process times" );
+#endif
 		return nullptr;
 	}
 	times->m_systemTime = double( kernelTime ) / 10000000.0;
@@ -41,7 +44,10 @@ BlueSysInfoTaskTimesPtr BlueSysInfo::GetThreadTimes() const
 	int64_t kernelTime, userTime;
 	if( !CcpGetThreadTimes( kernelTime, userTime ) )
 	{
+#if BLUE_WITH_PYTHON
+		// Python-only: the OSError; without Python the caller only gets null
 		PyErr_SetString( PyExc_OSError, "Failed to get thread times" );
+#endif
 		return nullptr;
 	}
 	times->m_systemTime = double( kernelTime ) / 10000000.0;
@@ -85,9 +91,12 @@ std::vector<BlueSysInfoNetworkAdapterPtr> BlueSysInfo::GetNetworkAdapters() cons
 		BlueSysInfoNetworkAdapterPtr ptr;
 		ptr.CreateInstance();
 		ptr->m_name = UTF8ToWide( adapter.name );
+#if BLUE_WITH_PYTHON
+		// Python-only: the binary MAC address (macAddressString stays available)
 		const auto& mac = adapter.macAddress;
 		auto macAddressByteString = std::string( mac.begin(), mac.end() );
 		ptr->m_macAddress = PyBytes_FromStringAndSize( macAddressByteString.c_str(), macAddressByteString.size() );
+#endif
 		ptr->m_macAddressString = adapter.macAddressString;
 		ptr->m_uuid = adapter.uuidString;
 

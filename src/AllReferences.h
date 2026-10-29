@@ -14,7 +14,9 @@ public:
 	EXPOSE_TO_BLUE();
 
 	bool Update( float sec );
+#if BLUE_WITH_PYTHON
 	BluePy GetReferences( IRoot * obj );
+#endif
 	std::vector<IRootPtr> FindInterface( IRoot* obj, const char* iidName );
 	void SetRoot( IRoot * root );
 	IRootPtr GetRoot() const;

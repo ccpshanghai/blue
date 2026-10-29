@@ -182,11 +182,4 @@ bool InitCryptoModule( PyObject* blueModule )
 	return true;
 }
 
-#else
-
-bool InitCryptoModule( PyObject* )
-{
-	return true;
-}
-
 #endif

@@ -512,6 +512,8 @@ inline void MD5::II(uint4& a, uint4 b, uint4 c, uint4 d, uint4 x,
 }
 
 
+#if BLUE_WITH_PYTHON
+// Python-only: the md5_checksum module function (raw MAP_FUNCTION)
 PyObject* md5_checksum( PyObject*, PyObject* args )
 {
 	unsigned char* data;
@@ -528,6 +530,7 @@ PyObject* md5_checksum( PyObject*, PyObject* args )
 	char buffer[33] = {0};
 	return PyUnicode_FromString( checkSum.hex_digest( buffer ) );
 }
+#endif
 
 MAP_FUNCTION(
 	"md5_checksum", 

@@ -103,7 +103,9 @@ public:
 	BlueSysInfoNetworkAdapter();
 
 	std::wstring m_name;
+#if BLUE_WITH_PYTHON
 	PyObject* m_macAddress; // bytes
+#endif
 	std::string m_macAddressString;
 	std::string m_uuid;
 };

@@ -20,6 +20,8 @@ const Be::ClassInfo* AllReferences::ExposeToBlue()
 			":param time: maximum time in seconds that this method can run before returning\n"
 			":returns: True if the new generation of reference data is available; False if the user needs to keep calling Update" )
 
+#if BLUE_WITH_PYTHON
+		// Python-only: GetReferences returns a Python list of (parent, type, index) tuples
 		MAP_METHOD_AND_WRAP(
 			"GetReferences",
 			GetReferences,
@@ -28,6 +30,7 @@ const Be::ClassInfo* AllReferences::ExposeToBlue()
 			"1 for list elements, 2 - for dictionary keys. The index is eitheer the attibute name, list index or dict key.\n "
 			"The results are returned for data already gathered by Update method and may be out of date.\n\n"
 			":param obj: child object" )
+#endif
 
 		MAP_METHOD_AND_WRAP(
 			"FindInterface",

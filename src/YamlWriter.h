@@ -51,7 +51,9 @@ protected:
 
     void WriteVectorBegin( size_t size ) override;
 	void WriteVectorEnd( size_t size ) override;
+#if BLUE_WITH_PYTHON
 	void WriteStructureList( IBlueStructureList* structureList ) override;
+#endif
 
 
 protected:

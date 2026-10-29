@@ -81,6 +81,8 @@ Be::Result<std::string> SymmetricCipher::IsValid() const
 	return m_encryptCtx ? std::string() : "Invalid context";
 }
 
+#if BLUE_WITH_PYTHON
+// Python-only: SymmetricCipher.LoadKey (raw MAP_METHOD)
 PyObject *SymmetricCipher::PyLoadKey( PyObject *self, PyObject *args )
 {
 	const char *key;
@@ -108,6 +110,7 @@ PyObject *SymmetricCipher::PyLoadKey( PyObject *self, PyObject *args )
 
 	Py_RETURN_NONE;
 }
+#endif
 
 void SymmetricCipher::LoadKey( const std::string& key, const std::string& iv )
 {
@@ -118,6 +121,8 @@ void SymmetricCipher::LoadKey( const std::string& key, const std::string& iv )
 	m_iv = iv;
 }
 
+#if BLUE_WITH_PYTHON
+// Python-only: SymmetricCipher.Encrypt (raw MAP_METHOD)
 PyObject *SymmetricCipher::PyEncrypt( PyObject* self, PyObject* args )
 {
 	const char *bytes;
@@ -138,6 +143,7 @@ PyObject *SymmetricCipher::PyEncrypt( PyObject* self, PyObject* args )
 
 	return PyBytes_FromStringAndSize( returnValue.c_str(), returnValue.size() );
 }
+#endif
 
 Be::Result<std::string> SymmetricCipher::Encrypt( const std::string& plainText, std::string& returnValue ) const
 {
@@ -159,6 +165,8 @@ Be::Result<std::string> SymmetricCipher::Encrypt( const std::string& plainText, 
 	return std::string();
 }
 
+#if BLUE_WITH_PYTHON
+// Python-only: SymmetricCipher.Decrypt (raw MAP_METHOD)
 PyObject *SymmetricCipher::PyDecrypt( PyObject* self, PyObject* args )
 {
 	const char *bytes;
@@ -179,6 +187,7 @@ PyObject *SymmetricCipher::PyDecrypt( PyObject* self, PyObject* args )
 
 	return PyBytes_FromStringAndSize( returnValue.c_str(), returnValue.size() );
 }
+#endif
 
 Be::Result<std::string> SymmetricCipher::Decrypt( const std::string& encryptedText, std::string& returnValue ) const
 {
@@ -419,6 +428,8 @@ Be::Result<std::string> AsymmetricCipher::VerifySignature( const std::string& te
 	return std::string();
 }
 
+#if BLUE_WITH_PYTHON
+// Python-only: AsymmetricCipher.Encrypt, Decrypt, Sign and VerifySignature (raw MAP_METHOD)
 PyObject* AsymmetricCipher::PyEncrypt( PyObject* self, PyObject* args )
 {
 	const char *bytes;
@@ -508,3 +519,4 @@ PyObject* AsymmetricCipher::PyVerifySignature( PyObject* self, PyObject* args )
 		Py_RETURN_FALSE;
 	}
 }
+#endif

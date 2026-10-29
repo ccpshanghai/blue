@@ -440,6 +440,7 @@ void YamlWriter::WriteFloatMatrix( float* values, size_t numRows, size_t numColu
 	WriteVectorEnd( numRows );
 }
 
+#if BLUE_WITH_PYTHON
 void YamlWriter::WriteStructureList( IBlueStructureList* structureList )
 {
 	size_t n = structureList->GetSize();
@@ -615,3 +616,4 @@ void YamlWriter::WriteStructureList( IBlueStructureList* structureList )
 
 	AddMappingEndEvent();
 }
+#endif

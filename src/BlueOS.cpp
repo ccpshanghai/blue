@@ -2176,13 +2176,19 @@ void BlueOS::SetDesiredFrameTimeMilliseconds( uint32_t val )
 
 int32_t BlueOS::GetSleepTime() const
 {
+#if BLUE_WITH_PYTHON
+	// Python-only: the deprecation warning
 	PyErr_WarnEx( PyExc_DeprecationWarning, "blue.os.sleeptime no longer serves any purpose" , 1 );
+#endif
 	return mSleepTime;
 }
 
 void BlueOS::SetSleepTime( int32_t val )
 {
+#if BLUE_WITH_PYTHON
+	// Python-only: the deprecation warning
 	PyErr_WarnEx( PyExc_DeprecationWarning, "blue.os.sleeptime no longer serves any purpose" , 1 );
+#endif
 	mSleepTime = val;
 }
 
@@ -2259,7 +2265,10 @@ void BlueOS::ShowErrorMessageBox( const wchar_t* title, const wchar_t* message )
 
 void BlueOS::SetMarkupZonesInPython(bool markupZonesInPython)
 {
+#if BLUE_WITH_PYTHON
+	// Python-only: Python profiler zones; a no-op without Python
 	PyOS->SetMarkupZonesInPython( markupZonesInPython );
+#endif
 }
 
 void BlueOS::ShowMessageBoxForVerificationFailure( const std::string& errmsg )

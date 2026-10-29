@@ -173,6 +173,7 @@ bool AllReferences::CleanReferences( uint64_t endTime )
 	return true;
 }
 
+#if BLUE_WITH_PYTHON
 BluePy AllReferences::GetReferences( IRoot* obj )
 {
 	auto found = m_references.find( obj );
@@ -210,6 +211,7 @@ BluePy AllReferences::GetReferences( IRoot* obj )
 	}
 	return BluePy( result );
 }
+#endif
 
 std::vector<IRootPtr> AllReferences::FindInterface( IRoot* obj, const char* iidName )
 {

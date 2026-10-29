@@ -16,7 +16,9 @@
 }
 
 
+#if BLUE_WITH_PYTHON
 bool InitCryptoModule( PyObject* blueModule );
+#endif
 bool InitCrypto();
 
 Be::Result<std::string> SHA256( const void* buffer, size_t length, std::string& returnValue );
@@ -38,13 +40,19 @@ public:
 
 	Be::Result<std::string> IsValid() const;
 
+#if BLUE_WITH_PYTHON
 	static PyObject *PyLoadKey( PyObject *self, PyObject *args );
+#endif
 	void LoadKey( const std::string& key, const std::string& iv );
 
+#if BLUE_WITH_PYTHON
 	static PyObject *PyEncrypt( PyObject *self, PyObject *args );
+#endif
 	Be::Result<std::string> Encrypt( const std::string& plainText, std::string& returnValue ) const;
 
+#if BLUE_WITH_PYTHON
 	static PyObject *PyDecrypt( PyObject *self, PyObject *args );
+#endif
 	Be::Result<std::string> Decrypt( const std::string& encryptedText, std::string& returnValue ) const;
 
 
@@ -83,13 +91,21 @@ public:
 	Be::Result<std::string> LoadPrivateKey( const std::string& key, const std::string& password, bool& returnValue );
 	Be::Result<std::string> GetPublicKey( std::string& returnValue ) const;
 	Be::Result<std::string> GetPrivateKey( const std::string& password, std::string& returnValue ) const;
+#if BLUE_WITH_PYTHON
 	static PyObject *PyEncrypt( PyObject *self, PyObject *args );
+#endif
 	Be::Result<std::string> Encrypt( const std::string& plainText, std::string& returnValue ) const;
+#if BLUE_WITH_PYTHON
 	static PyObject *PyDecrypt( PyObject *self, PyObject *args );
+#endif
 	Be::Result<std::string> Decrypt( const std::string& encryptedText, std::string& returnValue ) const;
+#if BLUE_WITH_PYTHON
 	static PyObject *PySign( PyObject *self, PyObject *args );
+#endif
 	Be::Result<std::string> Sign( const std::string& text, std::string& returnValue ) const;
+#if BLUE_WITH_PYTHON
 	static PyObject *PyVerifySignature( PyObject *self, PyObject *args );
+#endif
 	Be::Result<std::string> VerifySignature( const std::string& text, const std::string& signature, bool& returnValue ) const;
 
 private:

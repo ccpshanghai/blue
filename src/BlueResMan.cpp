@@ -1062,7 +1062,9 @@ IBlueResource* BluePythonDynamicResourceConstructor::GetResource( const wchar_t*
 	if( !m_callable.Call( result, query ) )
 	{
 		CCP_LOGERR_CH( s_ch, "Error while calling script dynamic resource constructor" );
+#if BLUE_WITH_PYTHON
 		PyErr_Clear();
+#endif
 		return nullptr;
 	}
 

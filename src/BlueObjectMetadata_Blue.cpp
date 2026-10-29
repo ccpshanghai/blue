@@ -85,6 +85,8 @@ const Be::ClassInfo* BlueObjectMetadata::ExposeToBlue()
 	EXPOSURE_END()
 }
 
+#if BLUE_WITH_PYTHON
+// Python-only: CopyWithMetadata takes and returns Python objects
 MAP_FUNCTION_AND_WRAP( 
 	"CopyWithMetadata", 
 	PyCopyWithMetadata, 
@@ -94,3 +96,4 @@ MAP_FUNCTION_AND_WRAP(
 	":returns: a copy of the src item.\n"
 	":rtype: IRoot" 
 );
+#endif
