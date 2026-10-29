@@ -48,7 +48,9 @@
 #include <algorithm>
 #include <iomanip>
 #include "BlueTimeoutHandler.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 
 static CcpLogChannel_t s_chOS = CCP_LOG_DEFINE_CHANNEL( "OS" );
 static CcpLogChannel_t s_chErr = CCP_LOG_DEFINE_CHANNEL( "ERR" );

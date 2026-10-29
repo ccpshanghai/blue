@@ -3,7 +3,9 @@
 #include "StdAfx.h"
 #include "BlueStatistics.h"
 #include "IBlueOS.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 
 static CcpLogChannel_t s_ch = CCP_LOG_DEFINE_CHANNEL( "Telemetry" );
 

@@ -2,7 +2,9 @@
 
 #include "StdAfx.h"
 
+#if BLUE_WITH_PYTHON
 #include <socketmodule.h>
+#endif
 
 #if __clang__
 #pragma clang diagnostic push

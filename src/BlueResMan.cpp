@@ -20,7 +20,9 @@
 #include "BlueFileUtil.h"
 #include "IBlueObjectBuilder.h"
 #include "IBluePaths.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 
 #include <cctype>
 #include <cwctype>

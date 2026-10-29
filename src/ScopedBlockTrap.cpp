@@ -2,7 +2,9 @@
 
 #include "StdAfx.h"
 #include "ScopedBlockTrap.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 
 ScopedBlockTrap::ScopedBlockTrap()
 {

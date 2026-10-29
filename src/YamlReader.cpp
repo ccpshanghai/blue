@@ -11,7 +11,9 @@
 #include <BlueStatistics.h>
 #include "IBluePaths.h"
 #include "IBlueObjectMetadata.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 #ifndef _WIN32
 #include <locale>
 #include <codecvt>

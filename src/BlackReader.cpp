@@ -8,7 +8,9 @@
 #include "IBlueObjectProxy.h"
 #include "IBluePaths.h"
 #include "IBlueOS.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 
 namespace
 {

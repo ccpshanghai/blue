@@ -8,7 +8,9 @@
 #include "IBlueResMan.h"
 #include "IBluePython.h"
 #include "BlueStatistics.h"
+#if BLUE_WITH_PYTHON
 #include <Scheduler.h>
+#endif
 
 
 static CcpLogChannel_t s_ch = CCP_LOG_DEFINE_CHANNEL( "ResMan" );
