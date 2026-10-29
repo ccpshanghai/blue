@@ -172,6 +172,24 @@
         "VCPKG_TARGET_TRIPLET": "x64-osx-trinitydev",
         "VCPKG_HOST_TRIPLET": "x64-osx-trinitydev"
       }
+    },
+    {
+      "name": "linux-x64",
+      "displayName": "Linux x64, prebuilt dependencies",
+      "description": "No vcpkg toolchain: carbon-blueexposure and the other dependencies are found through the CMAKE_PREFIX_PATH environment variable, and blue follows the script backends that carbon-blueexposure was built with. Mirrors DotBlue's build/native.sh.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/.cmake-build-${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "CMAKE_INSTALL_RPATH": "$ORIGIN",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
     }
   ]
 }

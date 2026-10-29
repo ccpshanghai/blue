@@ -9,29 +9,12 @@
       "version>=": "3.0.0"
     },
     {
-      "name": "carbon-io",
-      "version>=": "1.3.1"
-    },
-    {
       "name": "carbon-pdmprotowrapper",
       "version>=": "2.0.4"
     },
     {
-      "name": "carbon-scheduler",
-      "version>=": "1.4.3"
-    },
-    {
-      "name": "carbon-exefile",
-      "version>=": "4.1.1",
-      "host": true
-    },
-    {
       "name": "gtest",
       "version>=": "1.16.0"
-    },
-    {
-      "name": "python3",
-      "version>=": "3.12.9#1"
     },
     "openssl",
     {
@@ -53,6 +36,33 @@
       ]
     }
   ],
+  "default-features": [
+    "python"
+  ],
+  "features": {
+    "python": {
+      "description": "Python backend: the blue extension module, Stackless tasklets and the Python-bound tests",
+      "dependencies": [
+        {
+          "name": "carbon-io",
+          "version>=": "1.3.1"
+        },
+        {
+          "name": "carbon-scheduler",
+          "version>=": "1.4.3"
+        },
+        {
+          "name": "carbon-exefile",
+          "version>=": "4.1.1",
+          "host": true
+        },
+        {
+          "name": "python3",
+          "version>=": "3.12.9#1"
+        }
+      ]
+    }
+  },
   "overrides": [
     {
       "name": "protobuf",
