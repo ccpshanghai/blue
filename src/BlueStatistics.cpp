@@ -243,6 +243,7 @@ void BlueStatistics::UpdateTelemetry()
 #endif
 }
 
+#if CCP_STACKLESS
 void SwitchToFiber( PyTaskletObject* to )
 {
 	if( !to || SchedulerAPI()->PyTasklet_IsMain( to ) )
@@ -256,7 +257,6 @@ void SwitchToFiber( PyTaskletObject* to )
 	}
 }
 
-#if CCP_STACKLESS
 void BlueStatistics::OnTaskletSwitch( PyObject* _from, PyObject* _to )
 {
 #if CCP_TELEMETRY_ENABLED
