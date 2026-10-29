@@ -3,6 +3,7 @@
 #include "StdAfx.h"
 
 #include "PercentileAccumulator.h"
+#include <cmath>
 
 PercentileAccumulator::PercentileAccumulator()
 {

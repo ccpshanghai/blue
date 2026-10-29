@@ -7,6 +7,7 @@
 #include "BlueResManBackgroundCall.h"
 #include <BlueStatistics.h>
 #include "IBlueOS.h"
+#include <climits>
 
 #if CCP_STACKLESS
 #include "BluePyCpp.h"

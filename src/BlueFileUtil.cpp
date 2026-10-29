@@ -5,6 +5,7 @@
 #include <vector>
 #include <cctype>
 #include <cwctype>
+#include <climits>
 #include "IBlueOS.h"
 #include "IBluePaths.h"
 

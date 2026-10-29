@@ -7,6 +7,7 @@
 #include "IBlueObjectMetadata.h"
 #include "BlueMemStream.h"
 #include <yaml.h>
+#include <cinttypes>
 #ifndef _WIN32
 #include <locale>
 #include <codecvt>
