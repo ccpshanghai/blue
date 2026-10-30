@@ -56,7 +56,7 @@ extern "C" {
  * bumps the major version. A host built against major M must refuse a blue with another major.
  *------------------------------------------------------------------------------------------*/
 #define BLUE_CAPI_VERSION_MAJOR 1
-#define BLUE_CAPI_VERSION_MINOR 1
+#define BLUE_CAPI_VERSION_MINOR 2
 #define BLUE_CAPI_VERSION ( ( BLUE_CAPI_VERSION_MAJOR << 16 ) | BLUE_CAPI_VERSION_MINOR )
 
 /* (major << 16) | minor of the blue that is loaded */
@@ -93,16 +93,18 @@ typedef struct BlueInitOptions
  * started and the call may be repeated). */
 BLUE_CAPI int32_t BLUE_CALL blue_initialize( const BlueInitOptions* options, BlueCError* err );
 
-/* Stop blue without exiting the process: joins its worker threads and frees its caches.
- * Objects the host still holds must not be used afterwards, except to blue_release them. */
+/* Stop blue without exiting the process: ends the resource waits still open (their fn runs,
+ * with BLUE_RESOURCE_SHUTDOWN unless the load had finished), joins its worker threads and frees
+ * its caches. Objects the host still holds must not be used afterwards, except to blue_release
+ * them. */
 BLUE_CAPI int32_t BLUE_CALL blue_shutdown( BlueCError* err );
 
 /* 1 while blue is running (between blue_initialize and blue_shutdown), else 0 */
 BLUE_CAPI int32_t BLUE_CALL blue_is_initialized( void );
 
 /* One frame of blue's main-thread work: the resource manager's main queue (finishing
- * asynchronous loads), cache housekeeping, deferred deletes and statistics. Never sleeps.
- * Call it once per frame. */
+ * asynchronous loads), cache housekeeping, deferred deletes and statistics; then the resource
+ * waits that have been decided (see "Resource waits"). Never sleeps. Call it once per frame. */
 BLUE_CAPI int32_t BLUE_CALL blue_pump( BlueCError* err );
 
 /*--------------------------------------------------------------------------------------------
@@ -314,6 +316,48 @@ BLUE_CAPI int32_t BLUE_CALL blue_enum_value_at( size_t index, size_t value_index
 /* The description of value value_index of enum index, NUL-terminated, "" when it has none; NULL
  * for a bad index. len (optional) receives its length. (1.1) */
 BLUE_CAPI const char* BLUE_CALL blue_enum_value_doc( size_t index, size_t value_index, size_t* len );
+
+/*--------------------------------------------------------------------------------------------
+ * Resource waits (1.2): a one-shot notification when an asynchronously loading resource (a
+ * BlueAsyncRes, such as what the resource manager's GetResource returns) has finished.
+ *
+ * A wait's fn runs exactly once, on the main thread, and never inside the call that registered
+ * it: from blue_pump, after blue's own work of that frame, or from blue_shutdown. Blue does not
+ * cancel or restart the load for a wait: resources are shared, so another holder may be waiting
+ * for the same one.
+ *------------------------------------------------------------------------------------------*/
+
+/* What a resource wait's fn receives (1.2) */
+typedef enum BlueResourceState
+{
+	BLUE_RESOURCE_READY = 1,		/* loaded and prepared: the resource's isGood is 1 */
+	BLUE_RESOURCE_FAILED = 2,		/* finished, but not good: isPrepared is 1, isGood 0 */
+	BLUE_RESOURCE_CANCELLED = 3,	/* blue_resource_wait_cancel ended the wait first */
+	BLUE_RESOURCE_SHUTDOWN = 4		/* blue_shutdown ended the wait first */
+} BlueResourceState;
+
+/* Receives the user_data given to blue_resource_wait and a BlueResourceState */
+typedef void ( BLUE_CALL *BlueResourceWaitFn )( void* user_data, int32_t state );
+
+/* Wait for resource (a BlueAsyncRes) to finish loading. fn( user_data, state ) runs exactly
+ * once, on the main thread: from blue_pump once the load has finished (READY or FAILED), from
+ * blue_pump after blue_resource_wait_cancel (CANCELLED), or from blue_shutdown (SHUTDOWN). It
+ * never runs inside this call, also when the resource has already finished; then the next
+ * blue_pump delivers it. fn should only record the state: it may call the functions that are
+ * callable from any thread, nothing else (a blue_pump inside it delivers nothing). A reload
+ * while waiting is waited for too.
+ *
+ * The wait holds a reference to resource until fn has run. *out_id receives a non-zero id,
+ * unique in the process, for blue_resource_wait_cancel; it is 0 when the call fails.
+ * BLUE_E_INVALID_ARGUMENT for a NULL resource, fn or out_id, or for a resource that is neither
+ * loading nor finished (one that was never initialised, such as a resource a dynamic:/
+ * constructor created); BLUE_E_TYPE for an object that is not a BlueAsyncRes. (1.2) */
+BLUE_CAPI int32_t BLUE_CALL blue_resource_wait( BlueObject* resource, BlueResourceWaitFn fn, void* user_data, uint64_t* out_id, BlueCError* err );
+
+/* End wait id early: its fn runs with BLUE_RESOURCE_CANCELLED from the next blue_pump, unless the
+ * load has already finished, in which case it runs with READY or FAILED. The load itself goes
+ * on. BLUE_E_NOT_FOUND for an id that is unknown or whose fn has already run. (1.2) */
+BLUE_CAPI int32_t BLUE_CALL blue_resource_wait_cancel( uint64_t id, BlueCError* err );
 
 /*--------------------------------------------------------------------------------------------
  * Values and callbacks. Values a host callback returns to blue must be built with these

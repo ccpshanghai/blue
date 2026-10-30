@@ -105,4 +105,10 @@ private:
 void RegisterLogEcho();
 void UnregisterLogEcho();
 
+// Resource waits (BlueCApiResources.cpp). blue_pump delivers the decided ones after blue's own
+// work, outside any notify loop (nested calls deliver nothing); blue_shutdown delivers every
+// one left, the pending ones as SHUTDOWN, before blue tears down.
+void DeliverResourceWaits();
+void ShutDownResourceWaits();
+
 } // namespace BlueCApi

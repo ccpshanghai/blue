@@ -1,6 +1,7 @@
 // Copyright © 2026 CCP ehf.
 //
-// Blue C API: version, lifecycle, main-thread check, errors and the per-frame pump.
+// Blue C API: version, lifecycle, main-thread check, errors and the per-frame pump (which also
+// delivers resource waits, BlueCApiResources.cpp).
 
 #include "StdAfx.h"
 
@@ -401,6 +402,16 @@ int32_t blue_shutdown( BlueCError* err )
 		// Terminal even if a step throws
 		s_state = STATE_SHUT_DOWN;
 		CCP_LOG_CH( s_ch, "Blue C API shutting down" );
+		// While ResMan and MotherLode are still up: each wait drops its notify target and its
+		// reference to the resource
+		try
+		{
+			ShutDownResourceWaits();
+		}
+		catch( ... )
+		{
+			// Each wait is delivered on its own; tearing blue down matters more
+		}
 		// Not BlueTerminate: that one exits the process
 		TearDown();
 		return BLUE_OK;
@@ -416,6 +427,8 @@ int32_t blue_pump( BlueCError* err )
 {
 	return Call( err, []( BlueCError& ) -> int32_t {
 		BeOS->PumpOS();
+		// After PumpOS has returned, so no notify loop is running
+		DeliverResourceWaits();
 		return BLUE_OK;
 	} );
 }

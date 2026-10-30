@@ -299,6 +299,7 @@ if(CARBON_BLUEEXPOSURE_WITH_CABI)
         src/capi/BlueCApiInternal.h
         src/capi/BlueCApiModule.cpp
         src/capi/BlueCApiObjects.cpp
+        src/capi/BlueCApiResources.cpp
         src/capi/BlueCApiValues.cpp
     )
 
