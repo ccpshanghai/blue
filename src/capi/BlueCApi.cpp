@@ -17,6 +17,7 @@
 #include <atomic>
 #include <vector>
 
+#include <sys/types.h>
 #include <sys/stat.h>
 
 static CcpLogChannel_t s_ch = CCP_LOG_DEFINE_CHANNEL( "CApi" );

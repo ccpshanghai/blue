@@ -290,8 +290,10 @@ if(NOT DEFINED CARBON_BLUEEXPOSURE_WITH_CABI)
     set(CARBON_BLUEEXPOSURE_WITH_CABI OFF)
 endif()
 if(CARBON_BLUEEXPOSURE_WITH_CABI)
-    # The Blue C API (include/blue_c) over the C-ABI exposure backend
+    # The Blue C API (include/blue_c) over the C-ABI exposure backend, and the C twin of the
+    # IBlueStream Python thunker (BlueStreamMethods.cpp)
     target_sources(Blue PRIVATE
+        src/BlueStreamMethodsCAbi.cpp
         include/blue_c/blue.h
         src/capi/BlueCApi.cpp
         src/capi/BlueCApiInternal.h
@@ -303,6 +305,8 @@ if(CARBON_BLUEEXPOSURE_WITH_CABI)
     # blue.h includes BlueCAbi.h, which blueexposure owns: copy the installed one next to
     # blue.h, so the build tree has the same include/blue_c layout as the install
     get_target_property(BLUEEXPOSURE_INCLUDE_DIRS BlueExposure INTERFACE_INCLUDE_DIRECTORIES)
+    # Looked up on every configure, so a moved blueexposure prefix is followed
+    unset(BLUE_CABI_HEADER CACHE)
     find_file(BLUE_CABI_HEADER BlueCAbi.h PATHS ${BLUEEXPOSURE_INCLUDE_DIRS} NO_DEFAULT_PATH)
     if(NOT BLUE_CABI_HEADER)
         message(FATAL_ERROR "BlueCAbi.h not found in carbon-blueexposure's include directories: ${BLUEEXPOSURE_INCLUDE_DIRS}")
