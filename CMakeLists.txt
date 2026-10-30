@@ -433,8 +433,12 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         include(CTest)
     endif()
     if(BUILD_TESTING AND NOT CARBON_BLUEEXPOSURE_WITH_PYTHON)
-        # The gtest suite embeds a Python interpreter and the rest runs through exefile
-        message(STATUS "Not building blue's tests: they all need the Python backend")
+        # The gtest suite embeds a Python interpreter and the rest runs through exefile; this
+        # flavour is tested through the C API
+        message(STATUS "Not building blue's gtest and Python tests: they need the Python backend")
+        if(CARBON_BLUEEXPOSURE_WITH_CABI)
+            add_subdirectory(tests/capi)
+        endif()
     elseif(BUILD_TESTING)
         add_subdirectory(tests)
 
