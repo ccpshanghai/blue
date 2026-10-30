@@ -286,6 +286,32 @@ target_sources(Blue PRIVATE
     ${PUBLIC_HEADER_FILES_INCLUDE}
 )
 
+if(NOT DEFINED CARBON_BLUEEXPOSURE_WITH_CABI)
+    set(CARBON_BLUEEXPOSURE_WITH_CABI OFF)
+endif()
+if(CARBON_BLUEEXPOSURE_WITH_CABI)
+    # The Blue C API (include/blue_c) over the C-ABI exposure backend
+    target_sources(Blue PRIVATE
+        include/blue_c/blue.h
+        src/capi/BlueCApi.cpp
+        src/capi/BlueCApiInternal.h
+        src/capi/BlueCApiModule.cpp
+        src/capi/BlueCApiObjects.cpp
+        src/capi/BlueCApiValues.cpp
+    )
+
+    # blue.h includes BlueCAbi.h, which blueexposure owns: copy the installed one next to
+    # blue.h, so the build tree has the same include/blue_c layout as the install
+    get_target_property(BLUEEXPOSURE_INCLUDE_DIRS BlueExposure INTERFACE_INCLUDE_DIRECTORIES)
+    find_file(BLUE_CABI_HEADER BlueCAbi.h PATHS ${BLUEEXPOSURE_INCLUDE_DIRS} NO_DEFAULT_PATH)
+    if(NOT BLUE_CABI_HEADER)
+        message(FATAL_ERROR "BlueCAbi.h not found in carbon-blueexposure's include directories: ${BLUEEXPOSURE_INCLUDE_DIRS}")
+    endif()
+    set(BLUE_CAPI_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/capi_include)
+    configure_file(${BLUE_CABI_HEADER} ${BLUE_CAPI_INCLUDE_DIR}/blue_c/BlueCAbi.h COPYONLY)
+    configure_file(include/blue_c/blue.h ${BLUE_CAPI_INCLUDE_DIR}/blue_c/blue.h COPYONLY)
+endif()
+
 option(PY27_COMPATIBILITY_MODE "Enable Python2.7 compatibility mode" OFF)
 if(NOT APPLE)
     # These are Objective-C++ and wholly guarded by #if __APPLE__, so they contribute

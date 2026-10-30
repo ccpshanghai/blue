@@ -1,0 +1,243 @@
+/* Copyright © 2026 CCP ehf.
+ *
+ * The Blue C API: a versioned, language-neutral way to start blue, create and call its
+ * objects, and read and write their streams, without CPython. Plain C (C99 or later).
+ *
+ * Values and errors are the C-ABI backend's types from BlueCAbi.h (installed next to this
+ * header); its ownership rules apply to every function here:
+ *   - Inputs (names, args, values passed in) are borrowed for the duration of the call.
+ *   - Outputs (out values, err->message) belong to the caller and are freed with
+ *     blue_value_release / blue_error_clear. An object handed out carries one reference (+1),
+ *     dropped with blue_release. out is overwritten without being released.
+ *   - err must be { BLUE_OK, NULL, 0 } or hold an earlier error (filling it frees the old
+ *     message). It may be NULL. It is left untouched on success, so test the returned status,
+ *     not err->code.
+ *   - Names are UTF-8 with an explicit length and need not be NUL-terminated.
+ *   - No C++ exception crosses this API; one caught inside is BLUE_E_EXCEPTION.
+ *
+ * Threads: blue runs on one thread, the one that called blue_initialize (the main thread).
+ * Every function returns BLUE_E_WRONG_THREAD from any other thread, and BLUE_E_NOT_INITIALIZED
+ * before blue_initialize or after blue_shutdown; functions that return a handle, a name or a
+ * count return NULL or 0 instead. The exceptions, callable from any thread at any time, are
+ * blue_abi_version, blue_is_initialized, blue_add_ref, blue_release, the blue_value_* and
+ * blue_callback_* helpers, blue_error_clear and blue_set_error_message.
+ *
+ * Logging: blue's log goes nowhere unless the environment variable BLUE_CAPI_LOG is 1, which
+ * echoes it to stderr. Errors logged during a failing call become its error message.
+ */
+
+#pragma once
+#ifndef BLUE_C_BLUE_H
+#define BLUE_C_BLUE_H
+
+#include "BlueCAbi.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#if defined( _WIN32 )
+#if defined( BLUE_CAPI_BUILD )
+#define BLUE_CAPI __declspec( dllexport )
+#else
+#define BLUE_CAPI __declspec( dllimport )
+#endif
+#define BLUE_CALL __cdecl
+#else
+#define BLUE_CAPI __attribute__( ( visibility( "default" ) ) )
+#define BLUE_CALL
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*--------------------------------------------------------------------------------------------
+ * Version. Adding functions bumps the minor version; changing a signature, a struct or a rule
+ * bumps the major version. A host built against major M must refuse a blue with another major.
+ *------------------------------------------------------------------------------------------*/
+#define BLUE_CAPI_VERSION_MAJOR 1
+#define BLUE_CAPI_VERSION_MINOR 0
+#define BLUE_CAPI_VERSION ( ( BLUE_CAPI_VERSION_MAJOR << 16 ) | BLUE_CAPI_VERSION_MINOR )
+
+/* (major << 16) | minor of the blue that is loaded */
+BLUE_CAPI uint32_t BLUE_CALL blue_abi_version( void );
+
+/*--------------------------------------------------------------------------------------------
+ * Handles. Classes, methods and functions live as long as the process; objects (BlueObject,
+ * from BlueCAbi.h) are reference counted.
+ *------------------------------------------------------------------------------------------*/
+typedef struct BlueClass BlueClass;			/* an exposed class */
+typedef struct BlueMethod BlueMethod;		/* a method of a class or of an interface it maps */
+typedef struct BlueFunction BlueFunction;	/* a module function */
+
+/*--------------------------------------------------------------------------------------------
+ * Lifecycle. Blue starts once per process and cannot be restarted.
+ *------------------------------------------------------------------------------------------*/
+typedef struct BlueInitOptions
+{
+	uint32_t struct_size;				/* sizeof( BlueInitOptions ) */
+	const char* app_dir;				/* UTF-8, NUL-terminated; must be an existing directory */
+	const char* const* args;			/* startup arguments such as "/resManThreadCount=2"; may be NULL */
+	uint32_t arg_count;
+	const char* const* search_paths;	/* "<key>=<directory>", such as "res=/data/res"; may be NULL */
+	uint32_t search_path_count;
+} BlueInitOptions;
+
+/* Start blue on the calling thread, which becomes the main thread. Strings in options are
+ * UTF-8 and NUL-terminated. Fails with BLUE_E_FAILED when blue is already running, or has run
+ * before in this process; with BLUE_E_INVALID_ARGUMENT for bad options (blue is then not
+ * started and the call may be repeated). */
+BLUE_CAPI int32_t BLUE_CALL blue_initialize( const BlueInitOptions* options, BlueCError* err );
+
+/* Stop blue without exiting the process: joins its worker threads and frees its caches.
+ * Objects the host still holds must not be used afterwards, except to blue_release them. */
+BLUE_CAPI int32_t BLUE_CALL blue_shutdown( BlueCError* err );
+
+/* 1 while blue is running (between blue_initialize and blue_shutdown), else 0 */
+BLUE_CAPI int32_t BLUE_CALL blue_is_initialized( void );
+
+/* One frame of blue's main-thread work: the resource manager's main queue (finishing
+ * asynchronous loads), cache housekeeping, deferred deletes and statistics. Never sleeps.
+ * Call it once per frame. */
+BLUE_CAPI int32_t BLUE_CALL blue_pump( BlueCError* err );
+
+/*--------------------------------------------------------------------------------------------
+ * Classes
+ *------------------------------------------------------------------------------------------*/
+
+/* The registered classes, by index */
+BLUE_CAPI size_t BLUE_CALL blue_class_count( void );
+BLUE_CAPI const BlueClass* BLUE_CALL blue_class_at( size_t index );
+
+/* The registered class named name (without a module prefix, such as "MemStream"), or NULL */
+BLUE_CAPI const BlueClass* BLUE_CALL blue_class_find( const char* name, size_t name_len );
+
+/* The class's name, NUL-terminated; len (optional) receives its length */
+BLUE_CAPI const char* BLUE_CALL blue_class_name( const BlueClass* cls, size_t* len );
+
+/* The class's parent class, or NULL */
+BLUE_CAPI const BlueClass* BLUE_CALL blue_class_parent( const BlueClass* cls );
+
+/* 1 if the class cannot be created with blue_create (abstract, or a singleton reached through
+ * blue_module_object_get), 0 if it can, 0 for NULL or an unregistered class */
+BLUE_CAPI int32_t BLUE_CALL blue_class_is_abstract( const BlueClass* cls );
+
+/* The class of an object, or NULL */
+BLUE_CAPI const BlueClass* BLUE_CALL blue_class_of( BlueObject* obj );
+
+/*--------------------------------------------------------------------------------------------
+ * Objects
+ *------------------------------------------------------------------------------------------*/
+
+/* A new instance of cls in *out (+1). BLUE_E_UNSUPPORTED for a class blue_class_is_abstract
+ * reports. */
+BLUE_CAPI int32_t BLUE_CALL blue_create( const BlueClass* cls, BlueObject** out, BlueCError* err );
+
+/* obj as the interface named iid (a C++ interface name such as "IBlueStream", or a class name)
+ * in *out (+1); BLUE_E_NOT_FOUND if obj does not implement it */
+BLUE_CAPI int32_t BLUE_CALL blue_query_interface( BlueObject* obj, const char* iid, size_t iid_len, BlueObject** out, BlueCError* err );
+
+/* Add or drop one reference; NULL is ignored. The last release destroys the object on the
+ * calling thread, so release on the main thread. */
+BLUE_CAPI void BLUE_CALL blue_add_ref( BlueObject* obj );
+BLUE_CAPI void BLUE_CALL blue_release( BlueObject* obj );
+
+/*--------------------------------------------------------------------------------------------
+ * Members: attributes and properties, looked up in the object's class and then its parents
+ *------------------------------------------------------------------------------------------*/
+BLUE_CAPI int32_t BLUE_CALL blue_get( BlueObject* obj, const char* name, size_t name_len, BlueCValue* out, BlueCError* err );
+BLUE_CAPI int32_t BLUE_CALL blue_set( BlueObject* obj, const char* name, size_t name_len, const BlueCValue* value, BlueCError* err );
+
+/*--------------------------------------------------------------------------------------------
+ * Methods. A class's own methods come first, then its parents', then those of the interfaces
+ * it maps (such as IBlueStream's Read, Write and Seek on every stream).
+ *------------------------------------------------------------------------------------------*/
+
+/* The method named name of cls, or NULL */
+BLUE_CAPI const BlueMethod* BLUE_CALL blue_method_find( const BlueClass* cls, const char* name, size_t name_len );
+
+/* The method's name, NUL-terminated; len (optional) receives its length */
+BLUE_CAPI const char* BLUE_CALL blue_method_name( const BlueMethod* method, size_t* len );
+
+/* Call method on obj (an instance of the class it was found on, or of a subclass; otherwise
+ * BLUE_E_SELF). out may be NULL to discard the result. */
+BLUE_CAPI int32_t BLUE_CALL blue_invoke( BlueObject* obj, const BlueMethod* method, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err );
+
+/*--------------------------------------------------------------------------------------------
+ * Module functions
+ *------------------------------------------------------------------------------------------*/
+BLUE_CAPI size_t BLUE_CALL blue_function_count( void );
+BLUE_CAPI const BlueFunction* BLUE_CALL blue_function_at( size_t index );
+BLUE_CAPI const BlueFunction* BLUE_CALL blue_function_find( const char* name, size_t name_len );
+BLUE_CAPI const char* BLUE_CALL blue_function_name( const BlueFunction* fn, size_t* len );
+BLUE_CAPI int32_t BLUE_CALL blue_call( const BlueFunction* fn, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err );
+
+/*--------------------------------------------------------------------------------------------
+ * Module objects: blue's singletons ("os", "paths", "resMan", ...)
+ *------------------------------------------------------------------------------------------*/
+BLUE_CAPI size_t BLUE_CALL blue_module_object_count( void );
+
+/* The name of module object index, NUL-terminated, or NULL; len (optional) receives its length */
+BLUE_CAPI const char* BLUE_CALL blue_module_object_name( size_t index, size_t* len );
+
+/* The module object named name in *out (+1); BLUE_E_NOT_FOUND for an unknown name or one that
+ * is not set */
+BLUE_CAPI int32_t BLUE_CALL blue_module_object_get( const char* name, size_t name_len, BlueObject** out, BlueCError* err );
+
+/*--------------------------------------------------------------------------------------------
+ * Enums: named sets of integer values. Several names may share a value.
+ *------------------------------------------------------------------------------------------*/
+BLUE_CAPI size_t BLUE_CALL blue_enum_count( void );
+
+/* The name of enum index, NUL-terminated, or NULL; len (optional) receives its length */
+BLUE_CAPI const char* BLUE_CALL blue_enum_name( size_t index, size_t* len );
+
+/* The number of values of enum index (0 for a bad index) */
+BLUE_CAPI size_t BLUE_CALL blue_enum_value_count( size_t index );
+
+/* Value value_index of enum index: its name (NUL-terminated, living as long as the process),
+ * the name's length and its value; every output pointer is optional. BLUE_E_NOT_FOUND for a
+ * bad index. */
+BLUE_CAPI int32_t BLUE_CALL blue_enum_value_at( size_t index, size_t value_index, const char** name, size_t* name_len, int64_t* value );
+
+/*--------------------------------------------------------------------------------------------
+ * Values and callbacks. Values a host callback returns to blue must be built with these
+ * (blue frees them); see BlueCAbi.h.
+ *------------------------------------------------------------------------------------------*/
+
+/* Free everything a value blue produced owns and reset it to BLUE_VK_NONE; NULL is ignored */
+BLUE_CAPI void BLUE_CALL blue_value_release( BlueCValue* value );
+
+/* BLUE_VK_STRING holding a copy of utf8[0, len) (BLUE_E_INVALID_ARGUMENT unless valid UTF-8) */
+BLUE_CAPI int32_t BLUE_CALL blue_value_set_string( BlueCValue* out, const char* utf8, size_t len, BlueCError* err );
+
+/* BLUE_VK_BYTES holding a copy of data[0, len) */
+BLUE_CAPI int32_t BLUE_CALL blue_value_set_bytes( BlueCValue* out, const void* data, size_t len, BlueCError* err );
+
+/* BLUE_VK_ARRAY of count BLUE_VK_NONE items, filled in place */
+BLUE_CAPI int32_t BLUE_CALL blue_value_set_array( BlueCValue* out, size_t count, BlueCError* err );
+
+/* BLUE_VK_MAP of pair_count (NONE, NONE) pairs, filled in place */
+BLUE_CAPI int32_t BLUE_CALL blue_value_set_map( BlueCValue* out, size_t pair_count, BlueCError* err );
+
+/* A handle holding one reference to a copy of callback, for BLUE_VK_CALLBACK values; NULL
+ * (err filled) when callback or its fn is NULL. destroy runs once, after the last release. */
+BLUE_CAPI BlueCallbackHandle* BLUE_CALL blue_callback_create( const BlueCCallback* callback, BlueCError* err );
+BLUE_CAPI void BLUE_CALL blue_callback_release( BlueCallbackHandle* handle );
+
+/*--------------------------------------------------------------------------------------------
+ * Errors
+ *------------------------------------------------------------------------------------------*/
+
+/* Free err's message and reset it to BLUE_OK; NULL is ignored */
+BLUE_CAPI void BLUE_CALL blue_error_clear( BlueCError* err );
+
+/* Set err to code with a copy of message[0, len) allocated by blue, for a host callback's
+ * error. Returns code. */
+BLUE_CAPI int32_t BLUE_CALL blue_set_error_message( BlueCError* err, int32_t code, const char* message, size_t len );
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BLUE_C_BLUE_H */
