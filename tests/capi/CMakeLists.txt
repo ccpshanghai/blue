@@ -21,11 +21,13 @@ target_compile_options(BlueCApiTest PRIVATE -Wall -Wextra -pedantic-errors)
 # (A bare $<TARGET_LINKER_FILE:Blue> becomes -L<dir> -lblue when blue.so does not exist yet at
 # configure time, which never matches a file named blue.so.)
 target_link_libraries(BlueCApiTest PRIVATE $<LINK_ONLY:Blue> Threads::Threads)
+# BlueRegistration::GetClassRegs() inside blue.so of this flavour on Linux, 2026-10-29 (blue's
+# classes plus blueexposure's BlueClasses, Copier, List and Dict). Update it when a class is
+# added or removed. tests/metadump checks metadata.json against it too.
+set(BLUE_CAPI_TEST_CLASS_COUNT 48)
+set(BLUE_CAPI_TEST_CLASS_COUNT ${BLUE_CAPI_TEST_CLASS_COUNT} PARENT_SCOPE)
 target_compile_definitions(BlueCApiTest PRIVATE
-    # BlueRegistration::GetClassRegs() inside blue.so of this flavour on Linux, 2026-10-29
-    # (blue's classes plus blueexposure's BlueClasses, Copier, List and Dict). Update it when a
-    # class is added or removed.
-    BLUE_CAPI_TEST_CLASS_COUNT=48
+    BLUE_CAPI_TEST_CLASS_COUNT=${BLUE_CAPI_TEST_CLASS_COUNT}
     # Of those, the ones blue_class_kind reports as abstract (null factory) and as singletons
     # (2026-10-30); the rest are creatable
     BLUE_CAPI_TEST_ABSTRACT_COUNT=7
