@@ -26,6 +26,10 @@ target_compile_definitions(BlueCApiTest PRIVATE
     # (blue's classes plus blueexposure's BlueClasses, Copier, List and Dict). Update it when a
     # class is added or removed.
     BLUE_CAPI_TEST_CLASS_COUNT=48
+    # Of those, the ones blue_class_kind reports as abstract (null factory) and as singletons
+    # (2026-10-30); the rest are creatable
+    BLUE_CAPI_TEST_ABSTRACT_COUNT=7
+    BLUE_CAPI_TEST_SINGLETON_COUNT=6
 )
 if(BLUE_CAPI_TEST_ASAN)
     target_compile_options(BlueCApiTest PRIVATE -fsanitize=address -fno-omit-frame-pointer)

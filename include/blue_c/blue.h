@@ -260,7 +260,7 @@ typedef struct BlueSignatureInfo
 
 /* The method's signature in *out; its strings and args array live as long as the process.
  * BLUE_E_INVALID_ARGUMENT for a NULL out or a struct_size smaller than the 1.1 fields (out is
- * then left as it is); BLUE_E_NOT_FOUND for a NULL method or one registered without a signature
+ * then left as it is); BLUE_E_NOT_FOUND for a NULL method or one without a recorded signature
  * (out then has no arguments and a NULL returns). (1.1) */
 BLUE_CAPI int32_t BLUE_CALL blue_method_signature( const BlueMethod* method, BlueSignatureInfo* out );
 

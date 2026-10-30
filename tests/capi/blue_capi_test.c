@@ -16,6 +16,7 @@
 #include "blue_c/blue.h"
 
 #include <pthread.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +84,15 @@ static BlueCValue DoubleValue( double v )
 	return value;
 }
 
+static BlueCValue ObjectValue( BlueObject* obj )
+{
+	BlueCValue value;
+	memset( &value, 0, sizeof( value ) );
+	value.kind = obj ? BLUE_VK_OBJECT : BLUE_VK_NONE;
+	value.u.obj = obj;
+	return value;
+}
+
 /* An integer attribute (INT or UINT, by its C++ type), or -12345 */
 static int64_t GetInt( BlueObject* obj, const char* name )
 {
@@ -135,6 +145,14 @@ static void TestBeforeInitialize( void )
 	BlueObject* os = NULL;
 	CHECK_FAILS( blue_module_object_get( NAME( "os" ), &os, &err_ ), BLUE_E_NOT_INITIALIZED, "not running" );
 	CHECK( os == NULL );
+	BlueMemberInfo member;
+	member.struct_size = sizeof( member );
+	CHECK( blue_class_member_at( NULL, 0, &member ) == BLUE_E_NOT_INITIALIZED );
+	BlueSignatureInfo signature;
+	signature.struct_size = sizeof( signature );
+	CHECK( blue_method_signature( NULL, &signature ) == BLUE_E_NOT_INITIALIZED );
+	CHECK( blue_class_kind( NULL ) == BLUE_CLASS_INVALID );
+	CHECK( blue_enum_value_doc( 0, 0, NULL ) == NULL );
 
 	/* Bad options leave blue startable */
 	char dir[] = "/nonexistent-blue-capi-test";
@@ -169,6 +187,9 @@ static void* OffThread( void* arg )
 	blue_error_clear( &err );
 	results[2] = (int32_t)blue_class_count();
 	results[3] = blue_is_initialized();
+	BlueSignatureInfo signature;
+	signature.struct_size = sizeof( signature );
+	results[4] = blue_function_signature( NULL, &signature );
 	return NULL;
 }
 
@@ -201,13 +222,14 @@ static void TestInitialize( const char* appDir )
 
 	/* Another thread is refused, except for the thread-free functions */
 	pthread_t thread;
-	int32_t results[4] = { 0, 0, -1, -1 };
+	int32_t results[5] = { 0, 0, -1, -1, 0 };
 	CHECK( pthread_create( &thread, NULL, OffThread, results ) == 0 );
 	CHECK( pthread_join( thread, NULL ) == 0 );
 	CHECK( results[0] == BLUE_E_WRONG_THREAD );
 	CHECK( results[1] == 1 );
 	CHECK( results[2] == 0 );
 	CHECK( results[3] == 1 );
+	CHECK( results[4] == BLUE_E_WRONG_THREAD );
 }
 
 static void TestClasses( void )
@@ -567,6 +589,535 @@ static void TestModule( void )
 	CHECK( blue_function_find( NAME( "NoSuchFunction" ) ) == NULL );
 }
 
+/*------------------------------------------------------------------------------------------*/
+/* Introspection (1.1) */
+
+static int IsUnknown( const char* type )
+{
+	return !type || strncmp( type, "unknown:", 8 ) == 0;
+}
+
+/* Member name of cls in *info; 0 if there is none */
+static int FindMember( const BlueClass* cls, const char* name, BlueMemberInfo* info )
+{
+	for( size_t i = 0; i < blue_class_member_count( cls ); ++i )
+	{
+		memset( info, 0, sizeof( *info ) );
+		info->struct_size = sizeof( *info );
+		if( blue_class_member_at( cls, i, info ) == BLUE_OK && info->name && strcmp( info->name, name ) == 0 )
+		{
+			return 1;
+		}
+	}
+	memset( info, 0, sizeof( *info ) );
+	return 0;
+}
+
+static BlueSignatureInfo MethodSignature( const BlueMethod* method )
+{
+	BlueSignatureInfo signature;
+	memset( &signature, 0, sizeof( signature ) );
+	signature.struct_size = sizeof( signature );
+	CHECK( blue_method_signature( method, &signature ) == BLUE_OK );
+	return signature;
+}
+
+/* 1 if signature is returns( arg_count type names... ) with optional_count omittable ones */
+static int SignatureIs( const BlueSignatureInfo* signature, const char* returns, uint32_t optionalCount, uint32_t argCount, ... )
+{
+	int same = signature->returns && strcmp( signature->returns, returns ) == 0 && signature->arg_count == argCount && signature->optional_count == optionalCount;
+	va_list args;
+	va_start( args, argCount );
+	for( uint32_t i = 0; i < argCount; ++i )
+	{
+		const char* expected = va_arg( args, const char* );
+		same = same && signature->args && signature->args[i] && strcmp( signature->args[i], expected ) == 0;
+	}
+	va_end( args );
+	return same;
+}
+
+static void PrintSignature( const char* owner, const char* name, const BlueSignatureInfo* signature )
+{
+	printf( "  %s.%s: %s(", owner, name, signature->returns ? signature->returns : "?" );
+	for( uint32_t i = 0; i < signature->arg_count; ++i )
+	{
+		printf( "%s%s", i ? ", " : "", signature->args && signature->args[i] ? signature->args[i] : "?" );
+	}
+	printf( ") optional %u\n", signature->optional_count );
+}
+
+static void TestClassKinds( void )
+{
+	printf( "class kinds, docs, IIDs and interfaces\n" );
+	size_t kinds[4] = { 0, 0, 0, 0 };
+	for( size_t i = 0; i < blue_class_count(); ++i )
+	{
+		const BlueClass* cls = blue_class_at( i );
+		const int32_t kind = blue_class_kind( cls );
+		CHECK( kind >= BLUE_CLASS_CREATABLE && kind <= BLUE_CLASS_SINGLETON );
+		if( kind < 0 || kind > 3 )
+		{
+			continue;
+		}
+		++kinds[kind];
+		/* blue_class_is_abstract merges the two kinds blue_create refuses */
+		CHECK( blue_class_is_abstract( cls ) == ( kind != BLUE_CLASS_CREATABLE ) );
+
+		size_t length = 99;
+		const char* doc = blue_class_doc( cls, &length );
+		CHECK( doc && length == strlen( doc ) );
+		const char* iid = blue_class_iid( cls, &length );
+		CHECK( iid && length == strlen( iid ) );
+
+		/* Own interfaces: each once, without IRoot and the class's IID, all answered to */
+		const size_t interfaceCount = blue_class_interface_count( cls );
+		for( size_t j = 0; j < interfaceCount; ++j )
+		{
+			const char* interfaceName = blue_class_interface_at( cls, j, &length );
+			CHECK( interfaceName && length == strlen( interfaceName ) );
+			if( !interfaceName )
+			{
+				continue;
+			}
+			CHECK( strcmp( interfaceName, "IRoot" ) != 0 && ( !iid || strcmp( interfaceName, iid ) != 0 ) );
+			for( size_t k = 0; k < j; ++k )
+			{
+				CHECK( strcmp( blue_class_interface_at( cls, k, NULL ), interfaceName ) != 0 );
+			}
+		}
+		CHECK( blue_class_interface_at( cls, interfaceCount, &length ) == NULL && length == 0 );
+	}
+	printf( "  %zu creatable, %zu abstract, %zu singletons\n", kinds[BLUE_CLASS_CREATABLE], kinds[BLUE_CLASS_ABSTRACT], kinds[BLUE_CLASS_SINGLETON] );
+	CHECK( kinds[BLUE_CLASS_INVALID] == 0 );
+	CHECK( kinds[BLUE_CLASS_ABSTRACT] == BLUE_CAPI_TEST_ABSTRACT_COUNT );
+	CHECK( kinds[BLUE_CLASS_SINGLETON] == BLUE_CAPI_TEST_SINGLETON_COUNT );
+	CHECK( kinds[BLUE_CLASS_CREATABLE] == BLUE_CAPI_TEST_CLASS_COUNT - BLUE_CAPI_TEST_ABSTRACT_COUNT - BLUE_CAPI_TEST_SINGLETON_COUNT );
+
+	CHECK( blue_class_kind( blue_class_find( NAME( "BlueOS" ) ) ) == BLUE_CLASS_SINGLETON );
+	CHECK( blue_class_kind( blue_class_find( NAME( "BlueSysInfo" ) ) ) == BLUE_CLASS_ABSTRACT );
+	CHECK( blue_class_kind( blue_class_find( NAME( "MemStream" ) ) ) == BLUE_CLASS_CREATABLE );
+
+	/* Template classes have an IID of their own; a class without a description has "" */
+	const BlueClass* list = blue_class_find( NAME( "List" ) );
+	CHECK( list && strcmp( blue_class_iid( list, NULL ), "_ClassDef" ) == 0 );
+	CHECK( list && strcmp( blue_class_doc( list, NULL ), "" ) == 0 );
+	const BlueClass* memStream = blue_class_find( NAME( "MemStream" ) );
+	CHECK( strcmp( blue_class_iid( memStream, NULL ), "MemStream" ) == 0 );
+	CHECK( strcmp( blue_class_doc( memStream, NULL ), "A memory stream" ) == 0 );
+	/* MAP_INTERFACE order: IBlueMemStream, IBlueStream, ICacheable (MemStream itself dropped) */
+	CHECK( blue_class_interface_count( memStream ) == 3 );
+	CHECK( strcmp( blue_class_interface_at( memStream, 0, NULL ), "IBlueMemStream" ) == 0 );
+	CHECK( strcmp( blue_class_interface_at( memStream, 1, NULL ), "IBlueStream" ) == 0 );
+	CHECK( strcmp( blue_class_interface_at( memStream, 2, NULL ), "ICacheable" ) == 0 );
+}
+
+static void TestMemStreamIntrospection( void )
+{
+	printf( "MemStream: members, methods, signatures\n" );
+	const BlueClass* cls = blue_class_find( NAME( "MemStream" ) );
+
+	/* Two read-only uint64 attributes */
+	CHECK( blue_class_member_count( cls ) == 2 );
+	static const char* const memberNames[] = { "size", "pos" };
+	for( size_t i = 0; i < 2; ++i )
+	{
+		BlueMemberInfo info;
+		memset( &info, 0, sizeof( info ) );
+		info.struct_size = sizeof( info );
+		CHECK( blue_class_member_at( cls, i, &info ) == BLUE_OK );
+		CHECK( info.name && strcmp( info.name, memberNames[i] ) == 0 );
+		CHECK( info.type && strcmp( info.type, "uint64" ) == 0 );
+		CHECK( info.flags == BLUE_MEMBER_READABLE );
+		CHECK( info.doc != NULL );
+	}
+
+	/* Only IBlueStream's interface methods, in registration order */
+	static const char* const methodNames[] = { "Read", "read", "Write", "write", "Seek", "seek" };
+	CHECK( blue_class_method_count( cls ) == 6 );
+	for( size_t i = 0; i < 6; ++i )
+	{
+		const BlueMethod* method = blue_class_method_at( cls, i );
+		size_t length = 0;
+		const char* name = blue_method_name( method, &length );
+		CHECK( name && strcmp( name, methodNames[i] ) == 0 );
+		if( !name )
+		{
+			continue;
+		}
+		CHECK( blue_method_find( cls, name, length ) == method );
+		const char* doc = blue_method_doc( method, &length );
+		CHECK( doc && *doc && length == strlen( doc ) );
+
+		const BlueSignatureInfo signature = MethodSignature( method );
+		PrintSignature( "MemStream", name, &signature );
+		if( i < 2 )
+		{
+			CHECK( SignatureIs( &signature, "bytes", 1, 1, "int64" ) );
+		}
+		else if( i < 4 )
+		{
+			CHECK( SignatureIs( &signature, "void", 1, 2, "bytes", "int64" ) );
+		}
+		else
+		{
+			CHECK( SignatureIs( &signature, "void", 1, 2, "int64", "int32" ) );
+		}
+	}
+	CHECK( blue_class_method_at( cls, 6 ) == NULL );
+}
+
+static void TestMemberTypes( void )
+{
+	printf( "member types and flags\n" );
+	static const char* const attributes[][2] = {
+		{ "myString", "string" },
+		{ "myUnicode", "string" },
+		{ "myBool", "bool" },
+		{ "myInt", "int32" },
+		{ "myUInt", "uint32" },
+		{ "myFloat", "float" },
+		{ "myDouble", "double" },
+		{ "myInt64", "int64" },
+		{ "myUInt64", "uint64" },
+		{ "myVector", "object:IList" },
+		{ "myDict", "object:IBlueDict" },
+		{ "sharedString", "string" },
+		{ "sharedStringW", "string" },
+	};
+	const BlueClass* cls = blue_class_find( NAME( "BlueTestHelperAttributes" ) );
+	CHECK( blue_class_member_count( cls ) == sizeof( attributes ) / sizeof( attributes[0] ) );
+	for( size_t i = 0; i < sizeof( attributes ) / sizeof( attributes[0] ); ++i )
+	{
+		BlueMemberInfo info;
+		CHECK( FindMember( cls, attributes[i][0], &info ) );
+		if( !info.type || strcmp( info.type, attributes[i][1] ) != 0 )
+		{
+			fprintf( stderr, "FAIL: BlueTestHelperAttributes.%s is %s, expected %s\n", attributes[i][0], info.type ? info.type : "(null)", attributes[i][1] );
+			++s_failures;
+		}
+		/* Embedded objects (IROOT) are never assigned */
+		const int embedded = strncmp( attributes[i][1], "object:", 7 ) == 0;
+		CHECK( info.flags == ( embedded ? BLUE_MEMBER_READABLE : BLUE_MEMBER_READABLE | BLUE_MEMBER_WRITABLE ) );
+	}
+
+	/* The same values as properties: the getters' C++ types */
+	static const char* const properties[][2] = {
+		{ "myString", "string" },
+		{ "myUnicode", "string" },
+		{ "myBool", "bool" },
+		{ "myInt", "int32" },
+		{ "myUInt", "uint32" },
+		{ "myFloat", "float" },
+		{ "myDouble", "double" },
+		{ "myInt64", "int64" },
+		{ "myUInt64", "uint64" },
+	};
+	cls = blue_class_find( NAME( "BlueTestHelperProperties" ) );
+	CHECK( blue_class_member_count( cls ) == sizeof( properties ) / sizeof( properties[0] ) );
+	for( size_t i = 0; i < sizeof( properties ) / sizeof( properties[0] ); ++i )
+	{
+		BlueMemberInfo info;
+		CHECK( FindMember( cls, properties[i][0], &info ) );
+		if( !info.type || strcmp( info.type, properties[i][1] ) != 0 )
+		{
+			fprintf( stderr, "FAIL: BlueTestHelperProperties.%s is %s, expected %s\n", properties[i][0], info.type ? info.type : "(null)", properties[i][1] );
+			++s_failures;
+		}
+		CHECK( info.flags == ( BLUE_MEMBER_READABLE | BLUE_MEMBER_WRITABLE | BLUE_MEMBER_PROPERTY ) );
+	}
+
+	/* A read-only property, and a hidden attribute that shares its name with a property */
+	BlueMemberInfo info;
+	CHECK( FindMember( blue_class_find( NAME( "BlueObjectProxy" ) ), "isResident", &info ) );
+	CHECK( info.flags == ( BLUE_MEMBER_READABLE | BLUE_MEMBER_PROPERTY ) && strcmp( info.type, "bool" ) == 0 );
+	const BlueClass* proxy = blue_class_find( NAME( "BlueObjectProxy" ) );
+	size_t objectCount = 0;
+	for( size_t i = 0; i < blue_class_member_count( proxy ); ++i )
+	{
+		memset( &info, 0, sizeof( info ) );
+		info.struct_size = sizeof( info );
+		CHECK( blue_class_member_at( proxy, i, &info ) == BLUE_OK );
+		if( info.name && strcmp( info.name, "object" ) == 0 )
+		{
+			++objectCount;
+			CHECK( info.flags & BLUE_MEMBER_PROPERTY );
+		}
+	}
+	CHECK( objectCount == 1 );
+	/* An enum attribute is its underlying integer */
+	CHECK( FindMember( blue_class_find( NAME( "BlueSysInfoOs" ) ), "platform", &info ) && strcmp( info.type, "int32" ) == 0 );
+}
+
+/* Every method, function and member of every class: a signature, and no unknown: type */
+static void TestWalkAll( void )
+{
+	printf( "every class, method, member and function\n" );
+	size_t methodCount = 0, memberCount = 0;
+	for( size_t i = 0; i < blue_class_count(); ++i )
+	{
+		const BlueClass* cls = blue_class_at( i );
+		const char* className = blue_class_name( cls, NULL );
+		for( size_t j = 0; j < blue_class_method_count( cls ); ++j )
+		{
+			++methodCount;
+			const BlueMethod* method = blue_class_method_at( cls, j );
+			size_t length = 0;
+			const char* name = blue_method_name( method, &length );
+			CHECK( method && name && blue_method_find( cls, name, length ) == method );
+			CHECK( blue_method_doc( method, NULL ) != NULL );
+			BlueSignatureInfo signature;
+			memset( &signature, 0, sizeof( signature ) );
+			signature.struct_size = sizeof( signature );
+			const int32_t status = blue_method_signature( method, &signature );
+			int unknown = IsUnknown( signature.returns ) || ( signature.arg_count && !signature.args );
+			for( uint32_t k = 0; k < signature.arg_count && signature.args; ++k )
+			{
+				unknown |= IsUnknown( signature.args[k] );
+			}
+			CHECK( signature.optional_count <= signature.arg_count );
+			if( status != BLUE_OK || unknown )
+			{
+				fprintf( stderr, "FAIL: %s.%s -> %d: ", className, name ? name : "?", status );
+				PrintSignature( className, name ? name : "?", &signature );
+				++s_failures;
+			}
+		}
+		CHECK( blue_class_method_at( cls, blue_class_method_count( cls ) ) == NULL );
+
+		for( size_t j = 0; j < blue_class_member_count( cls ); ++j )
+		{
+			++memberCount;
+			BlueMemberInfo info;
+			memset( &info, 0, sizeof( info ) );
+			info.struct_size = sizeof( info );
+			const int32_t status = blue_class_member_at( cls, j, &info );
+			CHECK( info.name && info.doc && ( info.flags & BLUE_MEMBER_READABLE ) );
+			if( status != BLUE_OK || IsUnknown( info.type ) )
+			{
+				fprintf( stderr, "FAIL: %s.%s -> %d: %s\n", className, info.name ? info.name : "?", status, info.type ? info.type : "(null)" );
+				++s_failures;
+			}
+		}
+	}
+	printf( "  %zu methods, %zu members\n", methodCount, memberCount );
+
+	for( size_t i = 0; i < blue_function_count(); ++i )
+	{
+		const BlueFunction* fn = blue_function_at( i );
+		const char* name = blue_function_name( fn, NULL );
+		CHECK( blue_function_doc( fn, NULL ) != NULL );
+		BlueSignatureInfo signature;
+		memset( &signature, 0, sizeof( signature ) );
+		signature.struct_size = sizeof( signature );
+		CHECK( blue_function_signature( fn, &signature ) == BLUE_OK );
+		PrintSignature( "blue", name ? name : "?", &signature );
+		int unknown = IsUnknown( signature.returns );
+		for( uint32_t k = 0; k < signature.arg_count && signature.args; ++k )
+		{
+			unknown |= IsUnknown( signature.args[k] );
+		}
+		CHECK( !unknown );
+	}
+	BlueSignatureInfo signature;
+	memset( &signature, 0, sizeof( signature ) );
+	signature.struct_size = sizeof( signature );
+	CHECK( blue_function_signature( blue_function_find( NAME( "AttachToLogServer" ) ), &signature ) == BLUE_OK );
+	CHECK( SignatureIs( &signature, "bool", 0, 0 ) );
+	CHECK( blue_function_signature( blue_function_find( NAME( "GetPDMByteData" ) ), &signature ) == BLUE_OK );
+	CHECK( SignatureIs( &signature, "object:IBlueStream", 0, 0 ) );
+
+	/* Enum value descriptions */
+	for( size_t i = 0; i < blue_enum_count(); ++i )
+	{
+		for( size_t j = 0; j < blue_enum_value_count( i ); ++j )
+		{
+			size_t length = 99;
+			const char* doc = blue_enum_value_doc( i, j, &length );
+			CHECK( doc && length == strlen( doc ) );
+		}
+		CHECK( blue_enum_value_doc( i, blue_enum_value_count( i ), NULL ) == NULL );
+	}
+	CHECK( blue_enum_value_doc( blue_enum_count(), 0, NULL ) == NULL );
+}
+
+/* The method name of cls, called on obj with args, its result in *out (released by the caller) */
+static int32_t InvokeByName( BlueObject* obj, const char* name, const BlueCValue* args, uint32_t argc, BlueCValue* out )
+{
+	const BlueClass* cls = blue_class_of( obj );
+	const BlueMethod* method = blue_method_find( cls, name, strlen( name ) );
+	CHECK( method != NULL );
+	BlueCError err = { BLUE_OK, NULL, 0 };
+	const int32_t status = blue_invoke( obj, method, args, argc, out, &err );
+	if( status != BLUE_OK )
+	{
+		fprintf( stderr, "FAIL: %s.%s -> %d (%s)\n", blue_class_name( cls, NULL ), name, status, err.message ? err.message : "" );
+		++s_failures;
+	}
+	blue_error_clear( &err );
+	return status;
+}
+
+static int IsObjectOf( const BlueCValue* value, const char* className )
+{
+	return value->kind == BLUE_VK_OBJECT && value->u.obj && strcmp( blue_class_name( blue_class_of( value->u.obj ), NULL ), className ) == 0;
+}
+
+/* Methods that return BluePtr<T> (and vectors of them), callable since C API 1.1 */
+static void TestBluePtrMethods( void )
+{
+	printf( "methods returning BluePtr\n" );
+	const BlueClass* allReferencesClass = blue_class_find( NAME( "AllReferences" ) );
+	BlueSignatureInfo signature = MethodSignature( blue_method_find( allReferencesClass, NAME( "GetRoot" ) ) );
+	CHECK( SignatureIs( &signature, "object:IRoot", 0, 0 ) );
+	signature = MethodSignature( blue_method_find( allReferencesClass, NAME( "FindInterface" ) ) );
+	CHECK( SignatureIs( &signature, "list<object:IRoot>", 0, 2, "object:IRoot", "string" ) );
+
+	BlueObject* allReferences = NULL;
+	BlueObject* stream = NULL;
+	CHECK_OK( blue_create( allReferencesClass, &allReferences, &e_ ) );
+	CHECK_OK( blue_create( blue_class_find( NAME( "MemStream" ) ), &stream, &e_ ) );
+	if( allReferences && stream )
+	{
+		/* No root yet: NONE */
+		BlueCValue out;
+		InvokeByName( allReferences, "GetRoot", NULL, 0, &out );
+		CHECK( out.kind == BLUE_VK_NONE );
+		blue_value_release( &out );
+
+		BlueCValue root = ObjectValue( stream );
+		InvokeByName( allReferences, "SetRoot", &root, 1, NULL );
+		InvokeByName( allReferences, "GetRoot", NULL, 0, &out );
+		CHECK( out.kind == BLUE_VK_OBJECT && out.u.obj == stream );
+		blue_value_release( &out );
+
+		/* Update walks the graph from the root; then the root is found by its interface */
+		BlueCValue seconds = DoubleValue( 10.0 );
+		InvokeByName( allReferences, "Update", &seconds, 1, &out );
+		CHECK( out.kind == BLUE_VK_BOOL && out.u.i == 1 );
+		BlueCValue args[2] = { root, root };
+		CHECK_OK( blue_value_set_string( &args[1], NAME( "IBlueStream" ), &e_ ) );
+		InvokeByName( allReferences, "FindInterface", args, 2, &out );
+		blue_value_release( &args[1] );
+		CHECK( out.kind == BLUE_VK_ARRAY && out.u.arr.count == 1 && out.u.arr.items[0].kind == BLUE_VK_OBJECT && out.u.arr.items[0].u.obj == stream );
+		blue_value_release( &out );
+	}
+	blue_release( stream );
+	blue_release( allReferences );
+
+	const BlueClass* sysInfoClass = blue_class_find( NAME( "BlueSysInfo" ) );
+	signature = MethodSignature( blue_method_find( sysInfoClass, NAME( "GetMemory" ) ) );
+	CHECK( SignatureIs( &signature, "object:BlueSysInfoMemory", 0, 0 ) );
+	signature = MethodSignature( blue_method_find( sysInfoClass, NAME( "GetNetworkAdapters" ) ) );
+	CHECK( SignatureIs( &signature, "list<object:BlueSysInfoNetworkAdapter>", 0, 0 ) );
+
+	BlueObject* sysInfo = NULL;
+	CHECK_OK( blue_module_object_get( NAME( "sysinfo" ), &sysInfo, &e_ ) );
+	if( sysInfo )
+	{
+		BlueCValue out;
+		InvokeByName( sysInfo, "GetMemory", NULL, 0, &out );
+		CHECK( IsObjectOf( &out, "BlueSysInfoMemory" ) );
+		if( out.kind == BLUE_VK_OBJECT )
+		{
+			CHECK( GetInt( out.u.obj, "totalPhysical" ) > 0 );
+		}
+		blue_value_release( &out );
+		InvokeByName( sysInfo, "GetProcessTimes", NULL, 0, &out );
+		CHECK( IsObjectOf( &out, "BlueSysInfoTaskTimes" ) );
+		blue_value_release( &out );
+		InvokeByName( sysInfo, "GetThreadTimes", NULL, 0, &out );
+		CHECK( IsObjectOf( &out, "BlueSysInfoTaskTimes" ) );
+		blue_value_release( &out );
+		InvokeByName( sysInfo, "GetNetworkAdapters", NULL, 0, &out );
+		CHECK( out.kind == BLUE_VK_ARRAY );
+		if( out.kind == BLUE_VK_ARRAY )
+		{
+			printf( "  %zu network adapters\n", out.u.arr.count );
+			for( size_t i = 0; i < out.u.arr.count; ++i )
+			{
+				CHECK( IsObjectOf( &out.u.arr.items[i], "BlueSysInfoNetworkAdapter" ) );
+			}
+		}
+		blue_value_release( &out );
+		blue_release( sysInfo );
+	}
+}
+
+static void TestIntrospectionErrors( void )
+{
+	printf( "introspection: struct sizes and bad handles\n" );
+	const BlueClass* cls = blue_class_find( NAME( "MemStream" ) );
+	const BlueMethod* read = blue_method_find( cls, NAME( "Read" ) );
+	const BlueFunction* fn = blue_function_find( NAME( "AttachToLogServer" ) );
+	static const char sentinel[] = "untouched";
+
+	/* struct_size must cover the 1.1 fields; out is not touched otherwise */
+	BlueMemberInfo member;
+	memset( &member, 0, sizeof( member ) );
+	member.name = sentinel;
+	member.struct_size = (uint32_t)offsetof( BlueMemberInfo, doc );
+	CHECK( blue_class_member_at( cls, 0, &member ) == BLUE_E_INVALID_ARGUMENT && member.name == sentinel );
+	member.struct_size = 0;
+	CHECK( blue_class_member_at( cls, 0, &member ) == BLUE_E_INVALID_ARGUMENT && member.name == sentinel );
+	CHECK( blue_class_member_at( cls, 0, NULL ) == BLUE_E_INVALID_ARGUMENT );
+	BlueSignatureInfo signature;
+	memset( &signature, 0, sizeof( signature ) );
+	signature.returns = sentinel;
+	signature.struct_size = (uint32_t)offsetof( BlueSignatureInfo, args );
+	CHECK( blue_method_signature( read, &signature ) == BLUE_E_INVALID_ARGUMENT && signature.returns == sentinel );
+	CHECK( blue_function_signature( fn, &signature ) == BLUE_E_INVALID_ARGUMENT && signature.returns == sentinel );
+	CHECK( blue_method_signature( read, NULL ) == BLUE_E_INVALID_ARGUMENT );
+	CHECK( blue_function_signature( fn, NULL ) == BLUE_E_INVALID_ARGUMENT );
+
+	/* As a host built against a later minor version passes them: blue fills what it knows */
+	struct
+	{
+		BlueMemberInfo info;
+		uint64_t later;
+	} newerMember;
+	memset( &newerMember, 0, sizeof( newerMember ) );
+	newerMember.info.struct_size = sizeof( newerMember );
+	newerMember.later = 0xdeadbeef;
+	CHECK( blue_class_member_at( cls, 0, &newerMember.info ) == BLUE_OK );
+	CHECK( newerMember.info.name && strcmp( newerMember.info.name, "size" ) == 0 && newerMember.later == 0xdeadbeef );
+	CHECK( newerMember.info.struct_size == sizeof( newerMember ) );
+	struct
+	{
+		BlueSignatureInfo info;
+		uint64_t later;
+	} newerSignature;
+	memset( &newerSignature, 0, sizeof( newerSignature ) );
+	newerSignature.info.struct_size = sizeof( newerSignature );
+	newerSignature.later = 0xdeadbeef;
+	CHECK( blue_method_signature( read, &newerSignature.info ) == BLUE_OK );
+	CHECK( SignatureIs( &newerSignature.info, "bytes", 1, 1, "int64" ) && newerSignature.later == 0xdeadbeef );
+
+	/* Bad indexes */
+	member.struct_size = sizeof( member );
+	CHECK( blue_class_member_at( cls, blue_class_member_count( cls ), &member ) == BLUE_E_NOT_FOUND );
+	CHECK( member.name == NULL && member.type == NULL && member.doc == NULL && member.flags == 0 );
+	CHECK( blue_class_member_at( cls, (size_t)-1, &member ) == BLUE_E_NOT_FOUND );
+	CHECK( blue_class_interface_at( cls, (size_t)-1, NULL ) == NULL );
+	CHECK( blue_class_method_at( cls, (size_t)-1 ) == NULL );
+
+	/* NULL handles */
+	size_t length = 99;
+	CHECK( blue_class_kind( NULL ) == BLUE_CLASS_INVALID );
+	CHECK( blue_class_doc( NULL, &length ) == NULL && length == 0 );
+	CHECK( blue_class_iid( NULL, NULL ) == NULL );
+	CHECK( blue_class_interface_count( NULL ) == 0 && blue_class_interface_at( NULL, 0, NULL ) == NULL );
+	CHECK( blue_class_member_count( NULL ) == 0 );
+	CHECK( blue_class_member_at( NULL, 0, &member ) == BLUE_E_NOT_FOUND );
+	CHECK( blue_class_method_count( NULL ) == 0 && blue_class_method_at( NULL, 0 ) == NULL );
+	CHECK( blue_method_doc( NULL, NULL ) == NULL );
+	CHECK( blue_function_doc( NULL, NULL ) == NULL );
+	signature.struct_size = sizeof( signature );
+	CHECK( blue_method_signature( NULL, &signature ) == BLUE_E_NOT_FOUND );
+	CHECK( signature.returns == NULL && signature.args == NULL && signature.arg_count == 0 && signature.optional_count == 0 );
+	CHECK( blue_function_signature( NULL, &signature ) == BLUE_E_NOT_FOUND );
+}
+
 static int s_callbackDestroyed = 0;
 
 static int32_t HostCallback( void* userData, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err )
@@ -654,6 +1205,12 @@ static int RunAll( void )
 		TestStreams();
 		TestMembers();
 		TestModule();
+		TestClassKinds();
+		TestMemStreamIntrospection();
+		TestMemberTypes();
+		TestWalkAll();
+		TestBluePtrMethods();
+		TestIntrospectionErrors();
 		TestValues();
 		TestShutdown( appDir );
 	}
