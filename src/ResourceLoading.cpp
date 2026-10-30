@@ -97,3 +97,21 @@ BLUEIMPORT bool BlueInitializeResourceLoading()
 
 	return true;
 }
+
+BLUEIMPORT void BlueShutdownResourceLoading()
+{
+	if( !BeCallbackMan )
+	{
+		return;
+	}
+
+	// Join the worker threads first, so that no background work runs while the queues and
+	// caches it uses go away
+	BeCallbackMan->Stop();
+
+	s_resourceManagerInstance.Shutdown();
+	BeMotherLode->Shutdown();
+
+	BeCallbackMan->Unlock();
+	BeCallbackMan = nullptr;
+}
