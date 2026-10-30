@@ -16,6 +16,7 @@
 #include "blue_c/blue.h"
 
 #include <pthread.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -141,6 +142,9 @@ static void TestBeforeInitialize( void )
 	CHECK_FAILS( blue_initialize( NULL, &err_ ), BLUE_E_INVALID_ARGUMENT, "options" );
 	options.struct_size = 4;
 	CHECK_FAILS( blue_initialize( &options, &err_ ), BLUE_E_INVALID_ARGUMENT, "struct_size" );
+	/* Every 1.0 field is required */
+	options.struct_size = (uint32_t)offsetof( BlueInitOptions, search_path_count );
+	CHECK_FAILS( blue_initialize( &options, &err_ ), BLUE_E_INVALID_ARGUMENT, "struct_size" );
 	options.struct_size = sizeof( options );
 	CHECK_FAILS( blue_initialize( &options, &err_ ), BLUE_E_INVALID_ARGUMENT, "is not a directory" );
 	options.app_dir = NULL;
@@ -175,14 +179,25 @@ static void TestInitialize( const char* appDir )
 	char searchPath[4200];
 	snprintf( searchPath, sizeof( searchPath ), "res=%s", appDir );
 	const char* searchPaths[] = { searchPath };
-	BlueInitOptions options = Options( appDir );
-	options.args = args;
-	options.arg_count = 1;
-	options.search_paths = searchPaths;
-	options.search_path_count = 1;
-	CHECK_OK( blue_initialize( &options, &e_ ) );
+	/* As a host built against a later minor version passes it: a larger struct, whose fields
+	 * this blue does not know */
+	struct
+	{
+		BlueInitOptions options;
+		uint64_t later;
+	} newer;
+	memset( &newer, 0, sizeof( newer ) );
+	newer.options = Options( appDir );
+	newer.options.struct_size = sizeof( newer );
+	newer.later = 0xdeadbeef;
+	BlueInitOptions* options = &newer.options;
+	options->args = args;
+	options->arg_count = 1;
+	options->search_paths = searchPaths;
+	options->search_path_count = 1;
+	CHECK_OK( blue_initialize( options, &e_ ) );
 	CHECK( blue_is_initialized() == 1 );
-	CHECK_FAILS( blue_initialize( &options, &err_ ), BLUE_E_FAILED, "already initialized" );
+	CHECK_FAILS( blue_initialize( options, &err_ ), BLUE_E_FAILED, "already initialized" );
 
 	/* Another thread is refused, except for the thread-free functions */
 	pthread_t thread;

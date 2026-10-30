@@ -39,6 +39,9 @@ enum StateValue
 std::atomic<int> s_state{ STATE_UNINITIALIZED };
 CcpThreadId_t s_mainThread{};
 
+// The end of the last BlueInitOptions field of version 1.0: the smallest struct_size accepted
+constexpr size_t kInitOptionsSize_1_0 = offsetof( BlueInitOptions, search_path_count ) + sizeof( uint32_t );
+
 bool s_logToStderr = false;
 thread_local std::string* t_capturedError = nullptr;
 
@@ -290,9 +293,12 @@ int32_t blue_initialize( const BlueInitOptions* options, BlueCError* err )
 		{
 			return BlueCSetError( &error, BLUE_E_INVALID_ARGUMENT, "no options" );
 		}
-		if( options->struct_size < sizeof( BlueInitOptions ) )
+		// A host built against an older minor version passes a smaller struct than this blue's
+		// sizeof; every 1.0 field is required, fields added later must be read only when
+		// struct_size covers them
+		if( options->struct_size < kInitOptionsSize_1_0 )
 		{
-			return BlueCSetError( &error, BLUE_E_INVALID_ARGUMENT, "options.struct_size is %u, expected at least %zu", options->struct_size, sizeof( BlueInitOptions ) );
+			return BlueCSetError( &error, BLUE_E_INVALID_ARGUMENT, "options.struct_size is %u, expected at least %zu", options->struct_size, kInitOptionsSize_1_0 );
 		}
 
 		std::wstring appDir;
@@ -343,8 +349,16 @@ int32_t blue_initialize( const BlueInitOptions* options, BlueCError* err )
 			{
 				if( !committed )
 				{
-					TearDown();
 					s_state = STATE_SHUT_DOWN;
+					// A destructor must not throw (std::terminate); the failure is already
+					// being reported
+					try
+					{
+						TearDown();
+					}
+					catch( ... )
+					{
+					}
 				}
 			}
 		} guard;

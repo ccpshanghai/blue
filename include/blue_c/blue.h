@@ -72,10 +72,14 @@ typedef struct BlueFunction BlueFunction;	/* a module function */
 
 /*--------------------------------------------------------------------------------------------
  * Lifecycle. Blue starts once per process and cannot be restarted.
+ *
+ * BlueInitOptions grows only at its end, in minor versions; blue reads only the fields that
+ * struct_size covers (later ones count as zero), so a host built against an older minor
+ * version keeps working. Every field below is part of 1.0.
  *------------------------------------------------------------------------------------------*/
 typedef struct BlueInitOptions
 {
-	uint32_t struct_size;				/* sizeof( BlueInitOptions ) */
+	uint32_t struct_size;				/* sizeof( BlueInitOptions ) as the host compiled it */
 	const char* app_dir;				/* UTF-8, NUL-terminated; must be an existing directory */
 	const char* const* args;			/* startup arguments such as "/resManThreadCount=2"; may be NULL */
 	uint32_t arg_count;
@@ -205,7 +209,9 @@ BLUE_CAPI int32_t BLUE_CALL blue_enum_value_at( size_t index, size_t value_index
  * (blue frees them); see BlueCAbi.h.
  *------------------------------------------------------------------------------------------*/
 
-/* Free everything a value blue produced owns and reset it to BLUE_VK_NONE; NULL is ignored */
+/* Free everything a value blue produced owns and reset it to BLUE_VK_NONE; NULL is ignored.
+ * Objects in it are released as blue_release does, so release values that hold objects on the
+ * main thread. */
 BLUE_CAPI void BLUE_CALL blue_value_release( BlueCValue* value );
 
 /* BLUE_VK_STRING holding a copy of utf8[0, len) (BLUE_E_INVALID_ARGUMENT unless valid UTF-8) */
