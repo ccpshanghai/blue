@@ -242,19 +242,32 @@ int32_t blue_resource_wait( BlueObject* resource, BlueResourceWaitFn fn, void* u
 			return BlueCSetError( &error, BLUE_E_INVALID_ARGUMENT, "the %s is neither loading nor loaded (it was never initialised)", BlueCClassNameOf( root ) );
 		}
 
-		std::unique_ptr<Waiter> waiter( new Waiter( ++s_nextId, fn, user_data, asyncRes ) );
-		if( prepared )
+		// Into the registry before the resource knows the waiter, so a failure (out of memory)
+		// leaves no notify target behind for a destroyed waiter
+		const uint64_t id = ++s_nextId;
+		Waiters& waiters = AllWaiters();
+		Waiter& waiter = *waiters.emplace( id, std::unique_ptr<Waiter>( new Waiter( id, fn, user_data, asyncRes ) ) ).first->second;
+		try
 		{
-			// Finished already: delivered from the next blue_pump, without a notify target
-			waiter->DecideFromResource();
+			if( prepared )
+			{
+				// Finished already: delivered from the next blue_pump, without a notify target
+				waiter.DecideFromResource();
+			}
+			else
+			{
+				// Notifies at once only for a prepared resource, which this one is not
+				waiter.Register();
+			}
 		}
-		else
+		catch( ... )
 		{
-			// Notifies at once only for a prepared resource, which this one is not
-			waiter->Register();
+			// AddNotifyTarget throws before it adds the target, so only our own entries remain
+			Due().erase( std::remove( Due().begin(), Due().end(), id ), Due().end() );
+			waiters.erase( id );
+			throw;
 		}
-		*out_id = waiter->Id();
-		AllWaiters().emplace( waiter->Id(), std::move( waiter ) );
+		*out_id = id;
 		return BLUE_OK;
 	} );
 }
