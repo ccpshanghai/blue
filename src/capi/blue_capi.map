@@ -1,0 +1,11 @@
+/* Copyright © 2026 CCP ehf.
+ *
+ * Linker version script for BLUE_CAPI_EXPORTS_ONLY: blue.so exports the Blue C API
+ * (include/blue_c/blue.h) and nothing else. Unversioned names (anonymous node).
+ */
+{
+	global:
+		blue_*;
+	local:
+		*;
+};

@@ -316,6 +316,29 @@ if(CARBON_BLUEEXPOSURE_WITH_CABI)
     configure_file(include/blue_c/blue.h ${BLUE_CAPI_INCLUDE_DIR}/blue_c/blue.h COPYONLY)
 endif()
 
+# The Python-free flavour is consumed through the C API only. Without this, blue.so also
+# exports blueexposure, its C++ API and the statically linked OpenSSL/protobuf/curl (~14k
+# symbols). The Python flavours keep everything: trinity and the native shell link blue's C++.
+if(CARBON_BLUEEXPOSURE_WITH_CABI AND NOT CARBON_BLUEEXPOSURE_WITH_PYTHON AND NOT ( WIN32 OR APPLE ))
+    set(BLUE_CAPI_EXPORTS_ONLY_DEFAULT ON)
+else()
+    set(BLUE_CAPI_EXPORTS_ONLY_DEFAULT OFF)
+endif()
+option(BLUE_CAPI_EXPORTS_ONLY "Export only the Blue C API (blue_*) from blue.so and install only include/blue_c" ${BLUE_CAPI_EXPORTS_ONLY_DEFAULT})
+if(BLUE_CAPI_EXPORTS_ONLY)
+    if(NOT CARBON_BLUEEXPOSURE_WITH_CABI)
+        message(FATAL_ERROR "BLUE_CAPI_EXPORTS_ONLY needs carbon-blueexposure built with the C-ABI backend")
+    endif()
+    if(WIN32 OR APPLE)
+        message(FATAL_ERROR "BLUE_CAPI_EXPORTS_ONLY is implemented for ELF linkers only")
+    endif()
+    # The version script hides every symbol but blue_*; --exclude-libs keeps the static
+    # archives' symbols out of the dynamic table even if the script is loosened
+    set(BLUE_CAPI_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/src/capi/blue_capi.map)
+    target_link_options(Blue PRIVATE "LINKER:--version-script=${BLUE_CAPI_VERSION_SCRIPT}" "LINKER:--exclude-libs,ALL")
+    set_property(TARGET Blue APPEND PROPERTY LINK_DEPENDS ${BLUE_CAPI_VERSION_SCRIPT})
+endif()
+
 option(PY27_COMPATIBILITY_MODE "Enable Python2.7 compatibility mode" OFF)
 if(NOT APPLE)
     # These are Objective-C++ and wholly guarded by #if __APPLE__, so they contribute
@@ -524,6 +547,16 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         endif()
     endif ()
 
-    install(DIRECTORY include DESTINATION . FILES_MATCHING PATTERN "*.h")
+    if(BLUE_CAPI_EXPORTS_ONLY)
+        # Only the C API is exported, so the C++ headers could not be linked against
+        install(FILES include/blue_c/blue.h ${BLUE_CAPI_INCLUDE_DIR}/blue_c/BlueCAbi.h DESTINATION include/blue_c)
+    elseif(CARBON_BLUEEXPOSURE_WITH_CABI)
+        install(DIRECTORY include DESTINATION . FILES_MATCHING PATTERN "*.h")
+        # blue.h includes it from its own directory
+        install(FILES ${BLUE_CAPI_INCLUDE_DIR}/blue_c/BlueCAbi.h DESTINATION include/blue_c)
+    else()
+        # Without the C-ABI backend blue.so has no C API
+        install(DIRECTORY include DESTINATION . FILES_MATCHING PATTERN "*.h" PATTERN "blue_c" EXCLUDE)
+    endif()
 
 endif()
