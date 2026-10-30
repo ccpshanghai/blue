@@ -56,7 +56,7 @@ extern "C" {
  * bumps the major version. A host built against major M must refuse a blue with another major.
  *------------------------------------------------------------------------------------------*/
 #define BLUE_CAPI_VERSION_MAJOR 1
-#define BLUE_CAPI_VERSION_MINOR 0
+#define BLUE_CAPI_VERSION_MINOR 1
 #define BLUE_CAPI_VERSION ( ( BLUE_CAPI_VERSION_MAJOR << 16 ) | BLUE_CAPI_VERSION_MINOR )
 
 /* (major << 16) | minor of the blue that is loaded */
@@ -106,6 +106,28 @@ BLUE_CAPI int32_t BLUE_CALL blue_is_initialized( void );
 BLUE_CAPI int32_t BLUE_CALL blue_pump( BlueCError* err );
 
 /*--------------------------------------------------------------------------------------------
+ * Type names (1.1): what members, arguments and return values hold, as the introspection
+ * functions below report it. NUL-terminated, living as long as the process, and ASCII without
+ * spaces except for the raw part of "unknown:" (a C++ type name):
+ *
+ *   type      := scalar | "string" | "bytes" | vector | "callback" | object | container
+ *              | "unknown:" raw
+ *   scalar    := "void" | "bool" | "int8" | "int16" | "int32" | "int64"
+ *              | "uint8" | "uint16" | "uint32" | "uint64" | "float" | "double"
+ *   vector    := "vector2" | "vector3" | "vector4" | "vector2d" | "vector3d" | "vector4d"
+ *              | "vector3i" | "color" | "quaternion" | "matrix"
+ *   object    := "object:" iid          an interface or class name; always nullable
+ *   container := "list<" type ">" | "map<" type "," type ">" | "tuple<" type ( "," type )* ">"
+ *              | "optional<" type ">"
+ *
+ * "void" is a return type only. Strings of every width are "string" (BLUE_VK_STRING, UTF-8);
+ * "bytes" is BLUE_VK_BYTES. Enums are their underlying integer type. "unknown:" marks a type
+ * the C ABI cannot convert: a call that takes or returns one fails with BLUE_E_UNSUPPORTED.
+ * New names may be added in minor versions; a host treats a name it does not know as
+ * "unknown:".
+ *------------------------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------------------------
  * Classes
  *------------------------------------------------------------------------------------------*/
 
@@ -128,6 +150,33 @@ BLUE_CAPI int32_t BLUE_CALL blue_class_is_abstract( const BlueClass* cls );
 
 /* The class of an object, or NULL */
 BLUE_CAPI const BlueClass* BLUE_CALL blue_class_of( BlueObject* obj );
+
+/* What blue_class_kind reports (1.1); splits what blue_class_is_abstract merges */
+typedef enum BlueClassKind
+{
+	BLUE_CLASS_INVALID = 0,		/* NULL, or a class that is not registered */
+	BLUE_CLASS_CREATABLE = 1,	/* blue_create makes instances */
+	BLUE_CLASS_ABSTRACT = 2,	/* no factory: instances only come from blue */
+	BLUE_CLASS_SINGLETON = 3	/* one global instance, reached through blue_module_object_get */
+} BlueClassKind;
+
+/* The class's BlueClassKind (1.1) */
+BLUE_CAPI int32_t BLUE_CALL blue_class_kind( const BlueClass* cls );
+
+/* The class's description, NUL-terminated, "" when it has none; NULL for NULL. len (optional)
+ * receives its length. (1.1) */
+BLUE_CAPI const char* BLUE_CALL blue_class_doc( const BlueClass* cls, size_t* len );
+
+/* The name of the class's own interface ID, NUL-terminated, or NULL. It is the class name except
+ * for a few template classes (List, Dict). len (optional) receives its length. (1.1) */
+BLUE_CAPI const char* BLUE_CALL blue_class_iid( const BlueClass* cls, size_t* len );
+
+/* The interfaces the class itself maps (blue_query_interface answers to them), in declaration
+ * order, each once, without IRoot and the class's own IID. Parents map their own: walk
+ * blue_class_parent for the rest. A bad index gives NULL; len (optional) receives the length.
+ * (1.1) */
+BLUE_CAPI size_t BLUE_CALL blue_class_interface_count( const BlueClass* cls );
+BLUE_CAPI const char* BLUE_CALL blue_class_interface_at( const BlueClass* cls, size_t index, size_t* len );
 
 /*--------------------------------------------------------------------------------------------
  * Objects
@@ -152,6 +201,32 @@ BLUE_CAPI void BLUE_CALL blue_release( BlueObject* obj );
 BLUE_CAPI int32_t BLUE_CALL blue_get( BlueObject* obj, const char* name, size_t name_len, BlueCValue* out, BlueCError* err );
 BLUE_CAPI int32_t BLUE_CALL blue_set( BlueObject* obj, const char* name, size_t name_len, const BlueCValue* value, BlueCError* err );
 
+/* BlueMemberInfo.flags (1.1) */
+#define BLUE_MEMBER_READABLE 0x1u	/* blue_get reads it */
+#define BLUE_MEMBER_WRITABLE 0x2u	/* blue_set assigns it */
+#define BLUE_MEMBER_PROPERTY 0x4u	/* backed by accessor functions, not a field */
+
+/* A member as blue_class_member_at describes it (1.1). Like BlueInitOptions it grows only at its
+ * end: the host sets struct_size, and blue fills only the fields struct_size covers. */
+typedef struct BlueMemberInfo
+{
+	uint32_t struct_size;	/* in: sizeof( BlueMemberInfo ) as the host compiled it */
+	uint32_t flags;			/* BLUE_MEMBER_* */
+	const char* name;
+	const char* type;		/* a type name, see "Type names" below */
+	const char* doc;		/* "" when none */
+} BlueMemberInfo;
+
+/* The class's own members (parents have their own: walk blue_class_parent), in declaration
+ * order, without hidden ones: what blue_get and blue_set reach. (1.1) */
+BLUE_CAPI size_t BLUE_CALL blue_class_member_count( const BlueClass* cls );
+
+/* Member index of cls in *out. Strings in it are NUL-terminated and live as long as the process.
+ * BLUE_E_INVALID_ARGUMENT for a NULL out or a struct_size smaller than the 1.1 fields (out is
+ * then left as it is); BLUE_E_NOT_FOUND for a NULL class or a bad index (out's strings are then
+ * NULL and its flags 0). (1.1) */
+BLUE_CAPI int32_t BLUE_CALL blue_class_member_at( const BlueClass* cls, size_t index, BlueMemberInfo* out );
+
 /*--------------------------------------------------------------------------------------------
  * Methods. A class's own methods come first, then its parents', then those of the interfaces
  * it maps (such as IBlueStream's Read, Write and Seek on every stream).
@@ -162,6 +237,32 @@ BLUE_CAPI const BlueMethod* BLUE_CALL blue_method_find( const BlueClass* cls, co
 
 /* The method's name, NUL-terminated; len (optional) receives its length */
 BLUE_CAPI const char* BLUE_CALL blue_method_name( const BlueMethod* method, size_t* len );
+
+/* Every method blue_method_find resolves for cls, each name once, in its lookup order (own,
+ * parents', interfaces'). A bad index gives NULL. (1.1) */
+BLUE_CAPI size_t BLUE_CALL blue_class_method_count( const BlueClass* cls );
+BLUE_CAPI const BlueMethod* BLUE_CALL blue_class_method_at( const BlueClass* cls, size_t index );
+
+/* The method's description, NUL-terminated, "" when it has none; NULL for NULL. len (optional)
+ * receives its length. (1.1) */
+BLUE_CAPI const char* BLUE_CALL blue_method_doc( const BlueMethod* method, size_t* len );
+
+/* What a method or module function takes and returns (1.1). Grows only at its end, like
+ * BlueMemberInfo: the host sets struct_size, blue fills the fields it covers. */
+typedef struct BlueSignatureInfo
+{
+	uint32_t struct_size;		/* in: sizeof( BlueSignatureInfo ) as the host compiled it */
+	uint32_t arg_count;			/* arguments a caller passes at most */
+	uint32_t optional_count;	/* how many trailing ones it may omit */
+	const char* returns;		/* a type name; "void" when the call returns BLUE_VK_NONE */
+	const char* const* args;	/* arg_count type names; may be NULL when arg_count is 0 */
+} BlueSignatureInfo;
+
+/* The method's signature in *out; its strings and args array live as long as the process.
+ * BLUE_E_INVALID_ARGUMENT for a NULL out or a struct_size smaller than the 1.1 fields (out is
+ * then left as it is); BLUE_E_NOT_FOUND for a NULL method or one registered without a signature
+ * (out then has no arguments and a NULL returns). (1.1) */
+BLUE_CAPI int32_t BLUE_CALL blue_method_signature( const BlueMethod* method, BlueSignatureInfo* out );
 
 /* Call method on obj (an instance of the class it was found on, or of a subclass; otherwise
  * BLUE_E_SELF). out may be NULL to discard the result. */
@@ -175,6 +276,12 @@ BLUE_CAPI const BlueFunction* BLUE_CALL blue_function_at( size_t index );
 BLUE_CAPI const BlueFunction* BLUE_CALL blue_function_find( const char* name, size_t name_len );
 BLUE_CAPI const char* BLUE_CALL blue_function_name( const BlueFunction* fn, size_t* len );
 BLUE_CAPI int32_t BLUE_CALL blue_call( const BlueFunction* fn, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err );
+
+/* The function's description, as blue_method_doc (1.1) */
+BLUE_CAPI const char* BLUE_CALL blue_function_doc( const BlueFunction* fn, size_t* len );
+
+/* The function's signature, as blue_method_signature (1.1) */
+BLUE_CAPI int32_t BLUE_CALL blue_function_signature( const BlueFunction* fn, BlueSignatureInfo* out );
 
 /*--------------------------------------------------------------------------------------------
  * Module objects: blue's singletons ("os", "paths", "resMan", ...)
@@ -203,6 +310,10 @@ BLUE_CAPI size_t BLUE_CALL blue_enum_value_count( size_t index );
  * the name's length and its value; every output pointer is optional. BLUE_E_NOT_FOUND for a
  * bad index. */
 BLUE_CAPI int32_t BLUE_CALL blue_enum_value_at( size_t index, size_t value_index, const char** name, size_t* name_len, int64_t* value );
+
+/* The description of value value_index of enum index, NUL-terminated, "" when it has none; NULL
+ * for a bad index. len (optional) receives its length. (1.1) */
+BLUE_CAPI const char* BLUE_CALL blue_enum_value_doc( size_t index, size_t value_index, size_t* len );
 
 /*--------------------------------------------------------------------------------------------
  * Values and callbacks. Values a host callback returns to blue must be built with these

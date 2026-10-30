@@ -145,4 +145,19 @@ int32_t blue_enum_value_at( size_t index, size_t value_index, const char** name,
 	} );
 }
 
+const char* blue_enum_value_doc( size_t index, size_t value_index, size_t* len )
+{
+	const char* doc = nullptr;
+	const EnumRegsMap::value_type* entry = IsCallerOk() ? EnumAt( index ) : nullptr;
+	if( entry && entry->second.second )
+	{
+		const EnumValues& values = entry->second.second();
+		if( value_index < values.size() )
+		{
+			doc = values[value_index].mDescription ? values[value_index].mDescription : "";
+		}
+	}
+	return NameWithLength( doc, len );
+}
+
 #endif
