@@ -105,8 +105,9 @@ private:
 void RegisterLogEcho();
 void UnregisterLogEcho();
 
-// Resource waits (BlueCApiResources.cpp). blue_pump delivers the decided ones after blue's own
-// work, outside any notify loop (nested calls deliver nothing); blue_shutdown delivers every
+// Resource waits (BlueCApiResources.cpp). The outermost blue_pump delivers the decided ones
+// after blue's own work, outside any notify loop; a blue_pump nested in it (from a callback in
+// PumpOS's notify loop, or from a wait's fn) delivers nothing. blue_shutdown delivers every
 // one left, the pending ones as SHUTDOWN, before blue tears down.
 void DeliverResourceWaits();
 void ShutDownResourceWaits();

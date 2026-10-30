@@ -104,7 +104,10 @@ BLUE_CAPI int32_t BLUE_CALL blue_is_initialized( void );
 
 /* One frame of blue's main-thread work: the resource manager's main queue (finishing
  * asynchronous loads), cache housekeeping, deferred deletes and statistics; then the resource
- * waits that have been decided (see "Resource waits"). Never sleeps. Call it once per frame. */
+ * waits that have been decided (see "Resource waits"). Never sleeps. Call it once per frame.
+ * A blue_pump nested in another one (made from a callback blue runs during it, such as a
+ * ResourceWatch's onLoaded, or from a wait's fn) delivers no resource wait: the outer one
+ * delivers them once its frame is done. */
 BLUE_CAPI int32_t BLUE_CALL blue_pump( BlueCError* err );
 
 /*--------------------------------------------------------------------------------------------

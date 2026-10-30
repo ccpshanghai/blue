@@ -46,6 +46,10 @@ constexpr size_t kInitOptionsSize_1_0 = offsetof( BlueInitOptions, search_path_c
 bool s_logToStderr = false;
 thread_local std::string* t_capturedError = nullptr;
 
+// blue_pump calls running on the main thread (main thread only, like everything blue_pump
+// touches): only the outermost one delivers resource waits
+int s_pumpDepth = 0;
+
 const char* LogTypeName( CCP::LogType type )
 {
 	switch( type )
@@ -426,9 +430,27 @@ int32_t blue_is_initialized( void )
 int32_t blue_pump( BlueCError* err )
 {
 	return Call( err, []( BlueCError& ) -> int32_t {
+		// Counted over the whole body, PumpOS and delivery, also when either throws
+		struct PumpDepth
+		{
+			PumpDepth()
+			{
+				++s_pumpDepth;
+			}
+			~PumpDepth()
+			{
+				--s_pumpDepth;
+			}
+		} depth;
 		BeOS->PumpOS();
-		// After PumpOS has returned, so no notify loop is running
-		DeliverResourceWaits();
+		// Only the outermost pump delivers, after PumpOS has returned, so no notify loop is
+		// running. A blue_pump nested in a callback blue runs inside the outer one (a
+		// ResourceWatch.onLoaded inside PumpOS's notify loop, a wait's fn) delivers nothing; the
+		// outer one, or the next, delivers what was decided meanwhile.
+		if( s_pumpDepth == 1 )
+		{
+			DeliverResourceWaits();
+		}
 		return BLUE_OK;
 	} );
 }

@@ -1438,6 +1438,127 @@ static void PumpInsideWait( void* userData, int32_t state )
 	nested->otherCallsAfterPump = nested->other->calls;
 }
 
+typedef struct PumpInsideLoad
+{
+	const WaitRecord* sameResource;	/* a wait on the loading resource, ahead of the watch */
+	const WaitRecord* earlier;		/* a wait decided before the outer pump began */
+	int loadedCalls;
+	int32_t pumpStatus;
+	int sameCallsAfterPump;
+	int earlierCallsAfterPump;
+	int destroyed;
+} PumpInsideLoad;
+
+/* ResourceWatch.onLoaded, which blue runs inside PumpOS's notify loop: a blue_pump there
+ * delivers no resource wait */
+static int32_t PumpInsideLoaded( void* userData, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err )
+{
+	(void)args;
+	(void)argc;
+	(void)out;
+	(void)err;
+	PumpInsideLoad* test = (PumpInsideLoad*)userData;
+	++test->loadedCalls;
+	test->pumpStatus = blue_pump( NULL );
+	test->sameCallsAfterPump = test->sameResource->calls;
+	test->earlierCallsAfterPump = test->earlier->calls;
+	return BLUE_OK;
+}
+
+static void DestroyPumpInsideLoaded( void* userData )
+{
+	++( (PumpInsideLoad*)userData )->destroyed;
+}
+
+/* A blue_pump nested in a callback blue runs inside the outer blue_pump (ResourceWatch.onLoaded,
+ * in the notify loop of a load that finishes) delivers nothing: neither a wait decided before
+ * the outer pump began nor one the same notify loop just decided. The outer pump delivers both,
+ * once, after PumpOS has returned. */
+static void TestPumpInsideNotifyLoop( BlueObject* resMan )
+{
+	printf( "resource waits: blue_pump inside a notify loop\n" );
+	char path[64];
+	ResourcePath( path, sizeof( path ), "ss" );
+	BlueObject* prepared = GetResource( resMan, path );
+	if( !prepared )
+	{
+		return;
+	}
+	PumpUntilLoaded( prepared );
+	/* Its load finishes in a later pump: blue prepares on the main thread, from PumpOS */
+	ResourcePath( path, sizeof( path ), "ss" );
+	BlueObject* loading = GetResource( resMan, path );
+	BlueObject* watch = NULL;
+	CHECK_OK( blue_create( blue_class_find( NAME( "ResourceWatch" ) ), &watch, &e_ ) );
+	if( !loading || !watch )
+	{
+		blue_release( watch );
+		blue_release( loading );
+		blue_release( prepared );
+		return;
+	}
+
+	PumpInsideLoad test;
+	memset( &test, 0, sizeof( test ) );
+	test.sameCallsAfterPump = -1;
+	test.earlierCallsAfterPump = -1;
+	WaitRecord same = { 0, 0, 0, 0 };
+	WaitRecord earlier = { 0, 0, 0, 0 };
+	test.sameResource = &same;
+	test.earlier = &earlier;
+
+	/* The wait first, so the notify loop decides it before it runs onLoaded */
+	CHECK( GetFlag( loading, "isLoading" ) == 1 );
+	StartWait( loading, &same );
+	BlueCCallback onLoaded = { PumpInsideLoaded, &test, DestroyPumpInsideLoaded };
+	BlueCallbackHandle* handle = blue_callback_create( &onLoaded, NULL );
+	CHECK( handle != NULL );
+	BlueCValue value;
+	memset( &value, 0, sizeof( value ) );
+	value.kind = BLUE_VK_CALLBACK;
+	value.u.callback = handle;
+	CHECK_OK( blue_set( watch, NAME( "onLoaded" ), &value, &e_ ) );
+	blue_callback_release( handle );
+	BlueCValue arg = ObjectValue( loading );
+	InvokeByName( watch, "Watch", &arg, 1, NULL );
+	CHECK( test.loadedCalls == 0 );
+
+	/* Before every pump, a fresh wait on the prepared resource: decided at once, so it is due
+	 * when the pump that runs onLoaded begins */
+	int frames = 0;
+	while( test.loadedCalls == 0 && frames < 5000 )
+	{
+		memset( &earlier, 0, sizeof( earlier ) );
+		StartWait( prepared, &earlier );
+		CHECK_OK( blue_pump( &e_ ) );
+		++frames;
+		CHECK( earlier.calls == 1 );
+		if( test.loadedCalls == 0 )
+		{
+			CHECK( same.calls == 0 );
+			SleepOneMillisecond();
+		}
+	}
+	printf( "  onLoaded after %d pump(s): nested blue_pump -> %d, waits delivered inside it: %d + %d\n", frames, test.pumpStatus, test.sameCallsAfterPump, test.earlierCallsAfterPump );
+	CHECK( test.loadedCalls == 1 && test.pumpStatus == BLUE_OK );
+	CHECK( test.sameCallsAfterPump == 0 && test.earlierCallsAfterPump == 0 );
+	/* Delivered by the outer pump, after PumpOS returned, once */
+	CHECK( same.calls == 1 && same.state == BLUE_RESOURCE_READY && same.onMainThread );
+	CHECK( earlier.calls == 1 && earlier.state == BLUE_RESOURCE_READY );
+	for( int i = 0; i < 3; ++i )
+	{
+		CHECK_OK( blue_pump( &e_ ) );
+	}
+	CHECK( same.calls == 1 && earlier.calls == 1 && test.loadedCalls == 1 );
+
+	/* The watch holds the only reference to the callback */
+	CHECK( test.destroyed == 0 );
+	blue_release( watch );
+	CHECK( test.destroyed == 1 );
+	blue_release( loading );
+	blue_release( prepared );
+}
+
 static void TestResourceWaits( void )
 {
 	printf( "resource waits\n" );
@@ -1500,6 +1621,8 @@ static void TestResourceWaits( void )
 		CHECK( second.calls == 1 && second.state == BLUE_RESOURCE_READY );
 		blue_release( resource );
 	}
+
+	TestPumpInsideNotifyLoop( resMan );
 
 	/* Loads that fail: in DoLoad, opening the stream, in DoPrepare */
 	CheckLoadEndsIn( resMan, "ns", BLUE_RESOURCE_FAILED );
