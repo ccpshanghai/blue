@@ -178,14 +178,18 @@ const BlueCMethodDef s_streamMethods[] = {
 	{ nullptr, nullptr, nullptr, 0 },
 };
 
-// In the vocabulary of BlueExposureTypeSignature.h ("long" is a 64-bit integer)
-const Be::BlueExposureFunctionSignature s_streamSignatures[] = {
-	{ "bytes", { "long" }, 1, 1 },
-	{ "bytes", { "long" }, 1, 1 },
-	{ "None", { "bytes", "long" }, 2, 1 },
-	{ "None", { "bytes", "long" }, 2, 1 },
-	{ "None", { "long", "int" }, 2, 1 },
-	{ "None", { "long", "int" }, 2, 1 },
+// C signatures, in the type names of BlueCAbiTypeName.h, at the same index as s_streamMethods
+const char* const s_readArgs[] = { "int64" };
+const char* const s_writeArgs[] = { "bytes", "int64" };
+const char* const s_seekArgs[] = { "int64", "int32" };
+
+const BlueCSignature s_streamSignatures[] = {
+	{ "bytes", s_readArgs, 1, 1 },
+	{ "bytes", s_readArgs, 1, 1 },
+	{ "void", s_writeArgs, 2, 1 },
+	{ "void", s_writeArgs, 2, 1 },
+	{ "void", s_seekArgs, 2, 1 },
+	{ "void", s_seekArgs, 2, 1 },
 };
 
 } // namespace
