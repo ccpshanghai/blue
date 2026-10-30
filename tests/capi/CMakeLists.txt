@@ -49,7 +49,8 @@ set(BLUE_CAPI_TEST_ENVIRONMENT
 add_test(NAME BlueCApiTest COMMAND BlueCApiTest)
 add_test(NAME BlueCApiTest.InitFailure COMMAND BlueCApiTest init-failure)
 add_test(NAME BlueCApiTest.NoShutdown COMMAND BlueCApiTest no-shutdown)
-set_tests_properties(BlueCApiTest BlueCApiTest.InitFailure BlueCApiTest.NoShutdown
+add_test(NAME BlueCApiTest.ResourceWaitShutdown COMMAND BlueCApiTest resource-wait-shutdown)
+set_tests_properties(BlueCApiTest BlueCApiTest.InitFailure BlueCApiTest.NoShutdown BlueCApiTest.ResourceWaitShutdown
     PROPERTIES ENVIRONMENT "${BLUE_CAPI_TEST_ENVIRONMENT}"
 )
 

@@ -5,7 +5,9 @@
  *
  *   BlueCApiTest                 every case, ending with blue_shutdown
  *   BlueCApiTest init-failure    blue_initialize failing part-way (terminal)
- *   BlueCApiTest no-shutdown     exiting while blue still runs
+ *   BlueCApiTest no-shutdown     exiting while blue still runs (with a resource wait open)
+ *   BlueCApiTest resource-wait-shutdown
+ *                                blue_shutdown ending the resource waits still open
  *
  * Blue starts once per process, hence one mode per process. Temporary directories go to
  * $TMPDIR (default /tmp).
@@ -21,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static int s_failures = 0;
@@ -1170,6 +1173,379 @@ static void TestValues( void )
 	blue_callback_release( NULL );
 }
 
+/*------------------------------------------------------------------------------------------
+ * Resource waits (1.2), on BlueTestAsyncRes (extension "blueasync"). It reads its behaviour
+ * from the first two characters of the path as given, so the names are bare ("ss1.blueasync";
+ * a "res:/" name always succeeds): first s loads in 10 ms, l in 100 ms, n fails the load, f
+ * fails opening the stream; second s prepares in 1 ms, f fails the prepare. Failed test
+ * resources stay cached, so every case takes a fresh name.
+ *------------------------------------------------------------------------------------------*/
+
+static pthread_t s_mainThread;
+static int s_insideWaitCall = 0;
+static int s_resourceSerial = 0;
+
+typedef struct WaitRecord
+{
+	int calls;
+	int32_t state;
+	int onMainThread;
+	int insideWaitCall;
+} WaitRecord;
+
+static void RecordWait( void* userData, int32_t state )
+{
+	WaitRecord* record = (WaitRecord*)userData;
+	++record->calls;
+	record->state = state;
+	record->onMainThread = pthread_equal( pthread_self(), s_mainThread ) ? 1 : 0;
+	record->insideWaitCall = s_insideWaitCall;
+}
+
+static void SleepOneMillisecond( void )
+{
+	struct timespec delay = { 0, 1000000 };
+	nanosleep( &delay, NULL );
+}
+
+/* A fresh bare test resource name: prefix (two behaviour characters), a serial, ".blueasync" */
+static void ResourcePath( char* path, size_t size, const char* prefix )
+{
+	snprintf( path, size, "%s%d.blueasync", prefix, ++s_resourceSerial );
+}
+
+/* resMan.GetResource( path ) (+1), or NULL */
+static BlueObject* GetResource( BlueObject* resMan, const char* path )
+{
+	BlueCValue arg;
+	BlueCValue out;
+	BlueObject* result = NULL;
+	CHECK_OK( blue_value_set_string( &arg, path, strlen( path ), &e_ ) );
+	if( InvokeByName( resMan, "GetResource", &arg, 1, &out ) == BLUE_OK && out.kind == BLUE_VK_OBJECT )
+	{
+		result = out.u.obj;
+		out.kind = BLUE_VK_NONE;
+		out.u.obj = NULL;
+	}
+	blue_value_release( &out );
+	blue_value_release( &arg );
+	CHECK( result != NULL );
+	return result;
+}
+
+/* A BOOL (or integer) member as 0/1, or -1 */
+static int GetFlag( BlueObject* obj, const char* name )
+{
+	BlueCValue value;
+	int result = -1;
+	CHECK_OK( blue_get( obj, name, strlen( name ), &value, &e_ ) );
+	if( value.kind == BLUE_VK_BOOL || value.kind == BLUE_VK_INT || value.kind == BLUE_VK_UINT )
+	{
+		result = value.u.i != 0;
+	}
+	blue_value_release( &value );
+	return result;
+}
+
+/* Starts a wait that records into record; fn must not run inside the call */
+static uint64_t StartWait( BlueObject* resource, WaitRecord* record )
+{
+	uint64_t id = 0;
+	s_insideWaitCall = 1;
+	CHECK_OK( blue_resource_wait( resource, RecordWait, record, &id, &e_ ) );
+	s_insideWaitCall = 0;
+	CHECK( id != 0 );
+	CHECK( record->calls == 0 );
+	return id;
+}
+
+/* Pumps (1 ms apart) until *calls is not 0, at most maxFrames times; the number of pumps */
+static int PumpUntil( const int* calls, int maxFrames )
+{
+	int frames = 0;
+	while( *calls == 0 && frames < maxFrames )
+	{
+		CHECK_OK( blue_pump( &e_ ) );
+		++frames;
+		if( *calls == 0 )
+		{
+			SleepOneMillisecond();
+		}
+	}
+	return frames;
+}
+
+/* Pumps until obj's isLoading is 0 */
+static void PumpUntilLoaded( BlueObject* obj )
+{
+	for( int frame = 0; frame < 5000 && GetFlag( obj, "isLoading" ) != 0; ++frame )
+	{
+		CHECK_OK( blue_pump( &e_ ) );
+		SleepOneMillisecond();
+	}
+	CHECK( GetFlag( obj, "isLoading" ) == 0 );
+}
+
+/* Waits for a fresh resource named after prefix and expects it to end in state */
+static void CheckLoadEndsIn( BlueObject* resMan, const char* prefix, int32_t state )
+{
+	char path[64];
+	ResourcePath( path, sizeof( path ), prefix );
+	BlueObject* resource = GetResource( resMan, path );
+	if( !resource )
+	{
+		return;
+	}
+	WaitRecord record = { 0, 0, 0, 0 };
+	StartWait( resource, &record );
+	PumpUntil( &record.calls, 5000 );
+	printf( "  %s -> state %d after %d call(s)\n", path, record.state, record.calls );
+	CHECK( record.calls == 1 && record.state == state );
+	CHECK( record.onMainThread && !record.insideWaitCall );
+	CHECK( GetFlag( resource, "isPrepared" ) == 1 );
+	CHECK( GetFlag( resource, "isGood" ) == ( state == BLUE_RESOURCE_READY ) );
+	blue_release( resource );
+}
+
+typedef struct OffThreadWait
+{
+	BlueObject* resource;
+	int32_t waitStatus;
+	int32_t cancelStatus;
+	uint64_t id;
+	WaitRecord record;
+} OffThreadWait;
+
+static void* WaitOffThread( void* arg )
+{
+	OffThreadWait* test = (OffThreadWait*)arg;
+	test->id = 99;
+	test->waitStatus = blue_resource_wait( test->resource, RecordWait, &test->record, &test->id, NULL );
+	test->cancelStatus = blue_resource_wait_cancel( 1, NULL );
+	return NULL;
+}
+
+static int s_constructorDestroyed = 0;
+
+/* A dynamic:/ resource constructor: a fresh BlueTestAsyncRes, never initialised (+1 to blue) */
+static int32_t ConstructResource( void* userData, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err )
+{
+	(void)userData;
+	(void)args;
+	(void)argc;
+	BlueObject* resource = NULL;
+	const int32_t status = blue_create( blue_class_find( NAME( "BlueTestAsyncRes" ) ), &resource, err );
+	if( status == BLUE_OK )
+	{
+		out->kind = BLUE_VK_OBJECT;
+		out->u.obj = resource;
+	}
+	return status;
+}
+
+/* resMan.method( name[, callback] ) */
+static void InvokeWithName( BlueObject* resMan, const char* method, const char* name, BlueCallbackHandle* callback )
+{
+	BlueCValue args[2];
+	memset( args, 0, sizeof( args ) );
+	CHECK_OK( blue_value_set_string( &args[0], name, strlen( name ), &e_ ) );
+	args[1].kind = BLUE_VK_CALLBACK;
+	args[1].u.callback = callback;
+	InvokeByName( resMan, method, args, callback ? 2 : 1, NULL );
+	blue_value_release( &args[0] );
+}
+
+static void TestResourceWaitErrors( BlueObject* resMan )
+{
+	printf( "resource waits: errors\n" );
+	WaitRecord record = { 0, 0, 0, 0 };
+	uint64_t id = 99;
+	char path[64];
+	ResourcePath( path, sizeof( path ), "ss" );
+	BlueObject* resource = GetResource( resMan, path );
+
+	CHECK_FAILS( blue_resource_wait( NULL, RecordWait, &record, &id, &err_ ), BLUE_E_INVALID_ARGUMENT, "needs a resource" );
+	CHECK( id == 0 );
+	CHECK_FAILS( blue_resource_wait( resource, NULL, &record, &id, &err_ ), BLUE_E_INVALID_ARGUMENT, "needs a resource" );
+	CHECK_FAILS( blue_resource_wait( resource, RecordWait, &record, NULL, &err_ ), BLUE_E_INVALID_ARGUMENT, "needs a resource" );
+	CHECK( blue_resource_wait( NULL, RecordWait, &record, &id, NULL ) == BLUE_E_INVALID_ARGUMENT );
+
+	/* Not a BlueAsyncRes */
+	BlueObject* stream = NULL;
+	CHECK_OK( blue_create( blue_class_find( NAME( "MemStream" ) ), &stream, &e_ ) );
+	id = 99;
+	CHECK_FAILS( blue_resource_wait( stream, RecordWait, &record, &id, &err_ ), BLUE_E_TYPE, "MemStream is not a BlueAsyncRes" );
+	CHECK( id == 0 );
+	blue_release( stream );
+
+	/* Never initialised: created directly, and through a dynamic:/ constructor */
+	BlueObject* bare = NULL;
+	CHECK_OK( blue_create( blue_class_find( NAME( "BlueTestAsyncRes" ) ), &bare, &e_ ) );
+	CHECK_FAILS( blue_resource_wait( bare, RecordWait, &record, &id, &err_ ), BLUE_E_INVALID_ARGUMENT, "never initialised" );
+	blue_release( bare );
+
+	BlueCCallback constructor = { ConstructResource, &s_constructorDestroyed, DestroyCallback };
+	BlueCallbackHandle* handle = blue_callback_create( &constructor, NULL );
+	CHECK( handle != NULL );
+	InvokeWithName( resMan, "RegisterResourceConstructor", "capitest", handle );
+	blue_callback_release( handle );
+	BlueObject* dynamic = GetResource( resMan, "dynamic:/capitest/one" );
+	if( dynamic )
+	{
+		CHECK( strcmp( blue_class_name( blue_class_of( dynamic ), NULL ), "BlueTestAsyncRes" ) == 0 );
+		CHECK( GetFlag( dynamic, "isLoading" ) == 0 && GetFlag( dynamic, "isPrepared" ) == 0 );
+		CHECK_FAILS( blue_resource_wait( dynamic, RecordWait, &record, &id, &err_ ), BLUE_E_INVALID_ARGUMENT, "neither loading nor loaded" );
+		blue_release( dynamic );
+	}
+	InvokeWithName( resMan, "UnregisterResourceConstructor", "capitest", NULL );
+	CHECK( s_constructorDestroyed == 1 );
+
+	/* Unknown ids */
+	CHECK_FAILS( blue_resource_wait_cancel( 0, &err_ ), BLUE_E_NOT_FOUND, "no resource wait 0" );
+	CHECK_FAILS( blue_resource_wait_cancel( UINT64_MAX, &err_ ), BLUE_E_NOT_FOUND, "unknown" );
+
+	/* Another thread is refused */
+	OffThreadWait off;
+	memset( &off, 0, sizeof( off ) );
+	off.resource = resource;
+	pthread_t thread;
+	CHECK( pthread_create( &thread, NULL, WaitOffThread, &off ) == 0 );
+	CHECK( pthread_join( thread, NULL ) == 0 );
+	CHECK( off.waitStatus == BLUE_E_WRONG_THREAD && off.id == 0 );
+	CHECK( off.cancelStatus == BLUE_E_WRONG_THREAD );
+
+	/* None of these registered a wait */
+	PumpUntilLoaded( resource );
+	CHECK_OK( blue_pump( &e_ ) );
+	CHECK( record.calls == 0 && off.record.calls == 0 );
+	blue_release( resource );
+}
+
+typedef struct NestedPump
+{
+	WaitRecord record;
+	const WaitRecord* other;
+	int32_t pumpStatus;
+	int otherCallsAfterPump;
+} NestedPump;
+
+/* Breaks the "record only" rule on purpose: a blue_pump inside fn delivers nothing */
+static void PumpInsideWait( void* userData, int32_t state )
+{
+	NestedPump* nested = (NestedPump*)userData;
+	RecordWait( &nested->record, state );
+	nested->pumpStatus = blue_pump( NULL );
+	nested->otherCallsAfterPump = nested->other->calls;
+}
+
+static void TestResourceWaits( void )
+{
+	printf( "resource waits\n" );
+	BlueObject* resMan = NULL;
+	CHECK_OK( blue_module_object_get( NAME( "resMan" ), &resMan, &e_ ) );
+	if( !resMan )
+	{
+		return;
+	}
+	TestResourceWaitErrors( resMan );
+
+	/* A load that succeeds: not inside the call, READY once, on the main thread */
+	char path[64];
+	ResourcePath( path, sizeof( path ), "ss" );
+	BlueObject* resource = GetResource( resMan, path );
+	if( resource )
+	{
+		WaitRecord record = { 0, 0, 0, 0 };
+		const uint64_t id = StartWait( resource, &record );
+		CHECK( GetFlag( resource, "isLoading" ) == 1 );
+		const int frames = PumpUntil( &record.calls, 5000 );
+		printf( "  %s -> state %d after %d pump(s)\n", path, record.state, frames );
+		CHECK( record.calls == 1 && record.state == BLUE_RESOURCE_READY );
+		CHECK( record.onMainThread && !record.insideWaitCall );
+		for( int i = 0; i < 3; ++i )
+		{
+			CHECK_OK( blue_pump( &e_ ) );
+		}
+		CHECK( record.calls == 1 );
+		CHECK_FAILS( blue_resource_wait_cancel( id, &err_ ), BLUE_E_NOT_FOUND, "delivered already" );
+
+		/* Already prepared: not inside the call, READY from the very next pump */
+		WaitRecord again = { 0, 0, 0, 0 };
+		const uint64_t againId = StartWait( resource, &again );
+		CHECK( againId != id );
+		CHECK_OK( blue_pump( &e_ ) );
+		CHECK( again.calls == 1 && again.state == BLUE_RESOURCE_READY && !again.insideWaitCall );
+
+		/* Cancelled after the load finished: still READY */
+		WaitRecord late = { 0, 0, 0, 0 };
+		const uint64_t lateId = StartWait( resource, &late );
+		CHECK_OK( blue_resource_wait_cancel( lateId, &e_ ) );
+		CHECK( late.calls == 0 );
+		CHECK_OK( blue_pump( &e_ ) );
+		CHECK( late.calls == 1 && late.state == BLUE_RESOURCE_READY );
+
+		/* Two waits decided in one pump, the first pumping inside its fn: the nested pump
+		 * delivers nothing, the outer one then delivers the second */
+		NestedPump nested;
+		memset( &nested, 0, sizeof( nested ) );
+		WaitRecord second = { 0, 0, 0, 0 };
+		nested.other = &second;
+		nested.otherCallsAfterPump = -1;
+		uint64_t nestedId = 0;
+		CHECK_OK( blue_resource_wait( resource, PumpInsideWait, &nested, &nestedId, &e_ ) );
+		StartWait( resource, &second );
+		CHECK_OK( blue_pump( &e_ ) );
+		CHECK( nested.record.calls == 1 && nested.record.state == BLUE_RESOURCE_READY );
+		CHECK( nested.pumpStatus == BLUE_OK && nested.otherCallsAfterPump == 0 );
+		CHECK( second.calls == 1 && second.state == BLUE_RESOURCE_READY );
+		blue_release( resource );
+	}
+
+	/* Loads that fail: in DoLoad, opening the stream, in DoPrepare */
+	CheckLoadEndsIn( resMan, "ns", BLUE_RESOURCE_FAILED );
+	CheckLoadEndsIn( resMan, "fs", BLUE_RESOURCE_FAILED );
+	CheckLoadEndsIn( resMan, "sf", BLUE_RESOURCE_FAILED );
+
+	/* Two waits on one resource: each READY once */
+	ResourcePath( path, sizeof( path ), "ls" );
+	resource = GetResource( resMan, path );
+	if( resource )
+	{
+		WaitRecord first = { 0, 0, 0, 0 };
+		WaitRecord second = { 0, 0, 0, 0 };
+		const uint64_t firstId = StartWait( resource, &first );
+		const uint64_t secondId = StartWait( resource, &second );
+		CHECK( firstId != secondId );
+		PumpUntil( &first.calls, 5000 );
+		CHECK_OK( blue_pump( &e_ ) );
+		CHECK( first.calls == 1 && first.state == BLUE_RESOURCE_READY );
+		CHECK( second.calls == 1 && second.state == BLUE_RESOURCE_READY );
+		blue_release( resource );
+	}
+
+	/* Cancelled while loading: CANCELLED from the next pump; the load goes on */
+	ResourcePath( path, sizeof( path ), "ls" );
+	resource = GetResource( resMan, path );
+	if( resource )
+	{
+		WaitRecord record = { 0, 0, 0, 0 };
+		const uint64_t id = StartWait( resource, &record );
+		CHECK_OK( blue_resource_wait_cancel( id, &e_ ) );
+		CHECK( record.calls == 0 );
+		/* Cancelling again before delivery changes nothing */
+		CHECK_OK( blue_resource_wait_cancel( id, &e_ ) );
+		CHECK_OK( blue_pump( &e_ ) );
+		CHECK( record.calls == 1 && record.state == BLUE_RESOURCE_CANCELLED && record.onMainThread );
+		CHECK_FAILS( blue_resource_wait_cancel( id, &err_ ), BLUE_E_NOT_FOUND, "unknown, or delivered already" );
+		CHECK( GetFlag( resource, "isLoading" ) == 1 );
+		PumpUntilLoaded( resource );
+		CHECK( GetFlag( resource, "isGood" ) == 1 );
+		CHECK( record.calls == 1 );
+		blue_release( resource );
+	}
+	blue_release( resMan );
+}
+
 static void TestShutdown( const char* appDir )
 {
 	printf( "blue_pump and blue_shutdown\n" );
@@ -1212,6 +1588,7 @@ static int RunAll( void )
 		TestBluePtrMethods();
 		TestIntrospectionErrors();
 		TestValues();
+		TestResourceWaits();
 		TestShutdown( appDir );
 	}
 	rmdir( appDir );
@@ -1257,6 +1634,58 @@ static int RunNoShutdown( void )
 	blue_value_release( &data );
 	CHECK_OK( blue_pump( &e_ ) );
 	blue_release( stream );
+
+	/* A wait still open at exit holds its resource; nothing reports it as a leak */
+	BlueObject* resMan = NULL;
+	CHECK_OK( blue_module_object_get( NAME( "resMan" ), &resMan, &e_ ) );
+	BlueObject* resource = resMan ? GetResource( resMan, "ls1.blueasync" ) : NULL;
+	if( resource )
+	{
+		static WaitRecord record = { 0, 0, 0, 0 };
+		StartWait( resource, &record );
+		blue_release( resource );
+	}
+	blue_release( resMan );
+	rmdir( appDir );
+	return s_failures;
+}
+
+/* blue_shutdown with waits open: each fn runs once, from blue_shutdown, with SHUTDOWN (or the
+ * state it was decided with); the waits held the last references to their resources */
+static int RunResourceWaitShutdown( void )
+{
+	char appDir[4096];
+	MakeTempDir( appDir, sizeof( appDir ) );
+	printf( "blue_shutdown with resource waits open\n" );
+	const char* args[] = { "/resManThreadCount=2" };
+	BlueInitOptions options = Options( appDir );
+	options.args = args;
+	options.arg_count = 1;
+	CHECK_OK( blue_initialize( &options, &e_ ) );
+	BlueObject* resMan = NULL;
+	CHECK_OK( blue_module_object_get( NAME( "resMan" ), &resMan, &e_ ) );
+	BlueObject* loading = resMan ? GetResource( resMan, "ls1.blueasync" ) : NULL;
+	BlueObject* cancelled = resMan ? GetResource( resMan, "ls2.blueasync" ) : NULL;
+	WaitRecord pending = { 0, 0, 0, 0 };
+	WaitRecord decided = { 0, 0, 0, 0 };
+	uint64_t pendingId = 0;
+	if( loading && cancelled )
+	{
+		pendingId = StartWait( loading, &pending );
+		const uint64_t decidedId = StartWait( cancelled, &decided );
+		CHECK_OK( blue_resource_wait_cancel( decidedId, &e_ ) );
+	}
+	blue_release( loading );
+	blue_release( cancelled );
+	blue_release( resMan );
+
+	CHECK_OK( blue_shutdown( &e_ ) );
+	printf( "  pending -> state %d, cancelled -> state %d\n", pending.state, decided.state );
+	CHECK( pending.calls == 1 && pending.state == BLUE_RESOURCE_SHUTDOWN && pending.onMainThread );
+	CHECK( decided.calls == 1 && decided.state == BLUE_RESOURCE_CANCELLED );
+	CHECK_FAILS( blue_resource_wait_cancel( pendingId, &err_ ), BLUE_E_NOT_INITIALIZED, "not running" );
+	CHECK_FAILS( blue_pump( &err_ ), BLUE_E_NOT_INITIALIZED, "" );
+	CHECK( pending.calls == 1 && decided.calls == 1 );
 	rmdir( appDir );
 	return s_failures;
 }
@@ -1265,6 +1694,7 @@ int main( int argc, char** argv )
 {
 	const char* mode = argc > 1 ? argv[1] : "all";
 	int failures;
+	s_mainThread = pthread_self();
 	if( strcmp( mode, "all" ) == 0 )
 	{
 		failures = RunAll();
@@ -1277,9 +1707,13 @@ int main( int argc, char** argv )
 	{
 		failures = RunNoShutdown();
 	}
+	else if( strcmp( mode, "resource-wait-shutdown" ) == 0 )
+	{
+		failures = RunResourceWaitShutdown();
+	}
 	else
 	{
-		fprintf( stderr, "usage: %s [all|init-failure|no-shutdown]\n", argv[0] );
+		fprintf( stderr, "usage: %s [all|init-failure|no-shutdown|resource-wait-shutdown]\n", argv[0] );
 		return 2;
 	}
 	printf( failures ? "BlueCApiTest %s: %d FAILED\n" : "BlueCApiTest %s: OK\n", mode, failures );
