@@ -54,6 +54,11 @@ set_tests_properties(BlueCApiTest BlueCApiTest.InitFailure BlueCApiTest.NoShutdo
     PROPERTIES ENVIRONMENT "${BLUE_CAPI_TEST_ENVIRONMENT}"
 )
 
+# blue.h refuses a BlueCAbi.h of another major version (and compiles as C99, C11 and C++11)
+add_test(NAME BlueCApiCAbiVersion
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_cabi_version.sh ${CMAKE_C_COMPILER} ${CMAKE_CXX_COMPILER} ${BLUE_CAPI_INCLUDE_DIR}
+)
+
 if(BLUE_CAPI_EXPORTS_ONLY)
     if(NOT CMAKE_NM)
         message(FATAL_ERROR "BlueCApiExports needs nm (CMAKE_NM)")

@@ -1,8 +1,10 @@
 // Copyright © 2026 CCP ehf.
 //
 // Blue C API: classes, objects, members, methods and module functions, and their introspection
-// (1.1). Handles are blueexposure's own structures: a BlueClass is a Be::ClassInfo, a BlueMethod
-// and a BlueFunction a BlueCMethodDef, a BlueObject an IRoot.
+// (1.1), and member handles (1.3). Handles are blueexposure's own structures: a BlueClass is a
+// Be::ClassInfo, a BlueMethod and a BlueFunction a BlueCMethodDef, a BlueObject an IRoot (its
+// root, when the C API hands it out). A BlueMember is the C API's own: a member entry with the
+// class that holds it.
 
 #include "StdAfx.h"
 
@@ -14,6 +16,14 @@
 #include <vector>
 
 using namespace BlueCApi;
+
+// A resolved member (1.3): the entry and the class whose member table holds it, as
+// BlueCResolveMember gives them. Interned per entry and never freed, like the other handles.
+struct BlueMember
+{
+	const Be::ClassInfo* owner;
+	const Be::VarEntry* entry;
+};
 
 namespace
 {
@@ -31,6 +41,13 @@ const BlueClass* ToHandle( const Be::ClassInfo* type )
 IRoot* ToRoot( BlueObject* obj )
 {
 	return reinterpret_cast<IRoot*>( obj );
+}
+
+// What the C API hands out for obj: its root, so one object has one pointer. Takes over the
+// reference the caller holds on obj (the object's count, whichever pointer locked it).
+BlueObject* ToRootHandle( IRoot* obj )
+{
+	return reinterpret_cast<BlueObject*>( obj->GetRootObject() );
 }
 
 const char* ClassName( const Be::ClassInfo* type )
@@ -232,6 +249,39 @@ const ClassListing* GetListing( const Be::ClassInfo* type ) noexcept
 	}
 }
 
+// One BlueMember per member entry (1.3), built on first use and kept for the process; only the
+// main thread touches it. The map is node-based, so handles stay put as it grows.
+std::unordered_map<const Be::VarEntry*, BlueMember>& Members()
+{
+	static std::unordered_map<const Be::VarEntry*, BlueMember> s_members;
+	return s_members;
+}
+
+// The handle of entry (held by owner); null when out of memory (blue_member_find must not throw)
+const BlueMember* InternMember( const Be::ClassInfo* owner, const Be::VarEntry* entry ) noexcept
+{
+	try
+	{
+		return &Members().emplace( entry, BlueMember{ owner, entry } ).first->second;
+	}
+	catch( ... )
+	{
+		return nullptr;
+	}
+}
+
+// Prefix a failure of a member access with "<class of obj>.<member>: ", as blue_get does for the
+// failures after its lookup; with a handle the lookup cannot fail, so every failure says which
+// member it came from (also BLUE_E_SELF, whose message names only the classes)
+int32_t PrefixMemberFailure( int32_t status, BlueCError& error, IRoot* obj, const Be::VarEntry& entry )
+{
+	if( status != BLUE_OK )
+	{
+		PrefixMessage( error, BlueCClassNameOf( obj ), entry.mName, strlen( entry.mName ) );
+	}
+	return status;
+}
+
 // BLUE_MEMBER_* of entry, as BlueCGetMember and BlueCSetMember treat it
 uint32_t MemberFlags( const Be::VarEntry& entry )
 {
@@ -419,8 +469,8 @@ int32_t blue_create( const BlueClass* cls, BlueObject** out, BlueCError* err )
 		{
 			return capture.Fail( error, BLUE_E_FAILED, "creating the object failed" );
 		}
-		// The factory hands over one reference
-		*out = static_cast<BlueObject*>( instance );
+		// The factory hands over one reference, to an IRoot (the IID asked for)
+		*out = ToRootHandle( static_cast<IRoot*>( instance ) );
 		return BLUE_OK;
 	} );
 }
@@ -453,8 +503,10 @@ int32_t blue_query_interface( BlueObject* obj, const char* iid, size_t iid_len, 
 		{
 			return BlueCSetError( &error, BLUE_E_NOT_FOUND, "%s does not implement %s", BlueCClassNameOf( root ), name.c_str() );
 		}
-		// Every interface derives from IRoot first, so the interface pointer is an IRoot too
-		*out = static_cast<BlueObject*>( result );
+		// Every interface derives from IRoot first, so the interface pointer is an IRoot too. The
+		// reference QueryInterface added is the object's, so it goes out with the object's root:
+		// the same pointer as obj when obj came from blue
+		*out = ToRootHandle( static_cast<IRoot*>( result ) );
 		return BLUE_OK;
 	} );
 }
@@ -508,6 +560,46 @@ int32_t blue_set( BlueObject* obj, const char* name, size_t name_len, const Blue
 			PrefixMessage( error, BlueCClassNameOf( root ), name, name_len );
 		}
 		return status;
+	} );
+}
+
+const BlueMember* blue_member_find( const BlueClass* cls, const char* name, size_t name_len )
+{
+	if( !IsCallerOk() || !cls || !name )
+	{
+		return nullptr;
+	}
+	const Be::ClassInfo* owner = nullptr;
+	const Be::VarEntry* entry = BlueCResolveMember( ToClassInfo( cls ), name, name_len, &owner );
+	return entry && owner ? InternMember( owner, entry ) : nullptr;
+}
+
+int32_t blue_member_get( BlueObject* obj, const BlueMember* member, BlueCValue* out, BlueCError* err )
+{
+	if( out )
+	{
+		BlueCValueSetNone( *out );
+	}
+	return Call( err, [&]( BlueCError& error ) -> int32_t {
+		if( !member )
+		{
+			return BlueCSetError( &error, BLUE_E_INVALID_ARGUMENT, "blue_member_get without a member" );
+		}
+		// The entry function checks obj (BLUE_E_SELF for a null or foreign object)
+		IRoot* root = ToRoot( obj );
+		return PrefixMemberFailure( BlueCGetMemberEntry( root, member->owner, member->entry, out, &error ), error, root, *member->entry );
+	} );
+}
+
+int32_t blue_member_set( BlueObject* obj, const BlueMember* member, const BlueCValue* value, BlueCError* err )
+{
+	return Call( err, [&]( BlueCError& error ) -> int32_t {
+		if( !member )
+		{
+			return BlueCSetError( &error, BLUE_E_INVALID_ARGUMENT, "blue_member_set without a member" );
+		}
+		IRoot* root = ToRoot( obj );
+		return PrefixMemberFailure( BlueCSetMemberEntry( root, member->owner, member->entry, value, &error ), error, root, *member->entry );
 	} );
 }
 

@@ -40,8 +40,11 @@ enum StateValue
 std::atomic<int> s_state{ STATE_UNINITIALIZED };
 CcpThreadId_t s_mainThread{};
 
-// The end of the last BlueInitOptions field of version 1.0: the smallest struct_size accepted
+// The end of the last BlueInitOptions field of version 1.0: the smallest struct_size accepted.
+// BlueInitOptions.reserved (1.3) follows it and is never read: 1.0-1.2 hosts left it
+// uninitialised.
 constexpr size_t kInitOptionsSize_1_0 = offsetof( BlueInitOptions, search_path_count ) + sizeof( uint32_t );
+static_assert( kInitOptionsSize_1_0 == offsetof( BlueInitOptions, reserved ), "reserved follows the 1.0 fields" );
 
 bool s_logToStderr = false;
 thread_local std::string* t_capturedError = nullptr;

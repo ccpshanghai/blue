@@ -76,8 +76,10 @@ int32_t blue_module_object_get( const char* name, size_t name_len, BlueObject** 
 			{
 				return BlueCSetError( &error, BLUE_E_NOT_FOUND, "module object '%s' is not set", reg.first );
 			}
-			obj->Lock();
-			*out = reinterpret_cast<BlueObject*>( obj );
+			// Handed out as the object's root, like every BlueObject* (1.3)
+			IRoot* root = obj->GetRootObject();
+			root->Lock();
+			*out = reinterpret_cast<BlueObject*>( root );
 			return BLUE_OK;
 		}
 		return BlueCSetError( &error, BLUE_E_NOT_FOUND, "no module object '%.*s'", int( name_len ), name );

@@ -110,6 +110,23 @@ static int64_t GetInt( BlueObject* obj, const char* name )
 	return result;
 }
 
+/* 1 if obj answers to the interface iid with obj itself (the root, 1.3) */
+static int IsSameObject( BlueObject* obj, const char* iid )
+{
+	BlueObject* other = NULL;
+	BlueCError err = { BLUE_OK, NULL, 0 };
+	const int32_t status = blue_query_interface( obj, iid, strlen( iid ), &other, &err );
+	if( status != BLUE_OK )
+	{
+		fprintf( stderr, "FAIL: blue_query_interface( %s ) -> %d (%s)\n", iid, status, err.message ? err.message : "" );
+		++s_failures;
+	}
+	blue_error_clear( &err );
+	const int same = other == obj;
+	blue_release( other );
+	return same;
+}
+
 static void MakeTempDir( char* path, size_t size )
 {
 	const char* parent = getenv( "TMPDIR" );
@@ -138,6 +155,7 @@ static void TestBeforeInitialize( void )
 	CHECK( blue_abi_version() == BLUE_CAPI_VERSION );
 	CHECK( blue_abi_version() >> 16 == BLUE_CAPI_VERSION_MAJOR );
 	CHECK( sizeof( BlueCValue ) == 40 );
+	CHECK( sizeof( BlueInitOptions ) == 48 && offsetof( BlueInitOptions, reserved ) == 44 );
 	CHECK( blue_is_initialized() == 0 );
 
 	CHECK_FAILS( blue_pump( &err_ ), BLUE_E_NOT_INITIALIZED, "blue_initialize" );
@@ -156,6 +174,12 @@ static void TestBeforeInitialize( void )
 	CHECK( blue_method_signature( NULL, &signature ) == BLUE_E_NOT_INITIALIZED );
 	CHECK( blue_class_kind( NULL ) == BLUE_CLASS_INVALID );
 	CHECK( blue_enum_value_doc( 0, 0, NULL ) == NULL );
+	CHECK( blue_member_find( NULL, NAME( "size" ) ) == NULL );
+	BlueCValue value = IntValue( 1 );
+	CHECK_FAILS( blue_member_get( NULL, NULL, &value, &err_ ), BLUE_E_NOT_INITIALIZED, "not running" );
+	CHECK( value.kind == BLUE_VK_NONE );
+	value = IntValue( 1 );
+	CHECK_FAILS( blue_member_set( NULL, NULL, &value, &err_ ), BLUE_E_NOT_INITIALIZED, "not running" );
 
 	/* Bad options leave blue startable */
 	char dir[] = "/nonexistent-blue-capi-test";
@@ -193,6 +217,9 @@ static void* OffThread( void* arg )
 	BlueSignatureInfo signature;
 	signature.struct_size = sizeof( signature );
 	results[4] = blue_function_signature( NULL, &signature );
+	results[5] = blue_member_find( blue_class_at( 0 ), NAME( "size" ) ) == NULL ? 1 : 0;
+	BlueCValue value;
+	results[6] = blue_member_get( NULL, NULL, &value, NULL );
 	return NULL;
 }
 
@@ -204,7 +231,7 @@ static void TestInitialize( const char* appDir )
 	snprintf( searchPath, sizeof( searchPath ), "res=%s", appDir );
 	const char* searchPaths[] = { searchPath };
 	/* As a host built against a later minor version passes it: a larger struct, whose fields
-	 * this blue does not know */
+	 * this blue does not know. reserved is never read (1.3) */
 	struct
 	{
 		BlueInitOptions options;
@@ -213,6 +240,7 @@ static void TestInitialize( const char* appDir )
 	memset( &newer, 0, sizeof( newer ) );
 	newer.options = Options( appDir );
 	newer.options.struct_size = sizeof( newer );
+	newer.options.reserved = 0xa5a5a5a5u;
 	newer.later = 0xdeadbeef;
 	BlueInitOptions* options = &newer.options;
 	options->args = args;
@@ -225,7 +253,7 @@ static void TestInitialize( const char* appDir )
 
 	/* Another thread is refused, except for the thread-free functions */
 	pthread_t thread;
-	int32_t results[5] = { 0, 0, -1, -1, 0 };
+	int32_t results[7] = { 0, 0, -1, -1, 0, 0, 0 };
 	CHECK( pthread_create( &thread, NULL, OffThread, results ) == 0 );
 	CHECK( pthread_join( thread, NULL ) == 0 );
 	CHECK( results[0] == BLUE_E_WRONG_THREAD );
@@ -233,6 +261,8 @@ static void TestInitialize( const char* appDir )
 	CHECK( results[2] == 0 );
 	CHECK( results[3] == 1 );
 	CHECK( results[4] == BLUE_E_WRONG_THREAD );
+	CHECK( results[5] == 1 );
+	CHECK( results[6] == BLUE_E_WRONG_THREAD );
 }
 
 static void TestClasses( void )
@@ -284,6 +314,9 @@ static void TestClasses( void )
 				fprintf( stderr, "FAIL: creating %s -> %d (%s)\n", name, status, err.message ? err.message : "" );
 				++s_failures;
 			}
+			/* It is the object's root (1.3): IRoot and the class's IID give the same pointer */
+			CHECK( !obj || IsSameObject( obj, "IRoot" ) );
+			CHECK( !obj || IsSameObject( obj, blue_class_iid( cls, NULL ) ) );
 			blue_release( obj );
 		}
 		blue_error_clear( &err );
@@ -502,6 +535,238 @@ static void TestMembers( void )
 	blue_value_release( NULL );
 }
 
+static int32_t InvokeByName( BlueObject* obj, const char* name, const BlueCValue* args, uint32_t argc, BlueCValue* out );
+
+/* Member handles (1.3): the same results as by name, from one lookup */
+static int SameValue( const BlueCValue* a, const BlueCValue* b )
+{
+	if( a->kind != b->kind )
+	{
+		return 0;
+	}
+	switch( a->kind )
+	{
+	case BLUE_VK_NONE:
+		return 1;
+	case BLUE_VK_BOOL:
+	case BLUE_VK_INT:
+		return a->u.i == b->u.i;
+	case BLUE_VK_UINT:
+		return a->u.u == b->u.u;
+	case BLUE_VK_DOUBLE:
+		return a->u.d == b->u.d;
+	case BLUE_VK_STRING:
+	case BLUE_VK_BYTES:
+		return a->u.str.len == b->u.str.len && memcmp( a->u.str.ptr, b->u.str.ptr, a->u.str.len ) == 0;
+	case BLUE_VK_OBJECT:
+		return a->u.obj == b->u.obj;
+	default:
+		return 0;
+	}
+}
+
+/* blue_member_get of the member named name of cls gives what blue_get by name gives */
+static void CheckGetMatches( BlueObject* obj, const BlueClass* cls, const char* name )
+{
+	const BlueMember* member = blue_member_find( cls, name, strlen( name ) );
+	CHECK( member != NULL );
+	BlueCValue byHandle, byName;
+	BlueCError handleError = { BLUE_OK, NULL, 0 };
+	BlueCError nameError = { BLUE_OK, NULL, 0 };
+	const int32_t handleStatus = blue_member_get( obj, member, &byHandle, &handleError );
+	const int32_t nameStatus = blue_get( obj, name, strlen( name ), &byName, &nameError );
+	if( handleStatus != nameStatus || !SameValue( &byHandle, &byName ) || ( handleError.message == NULL ) != ( nameError.message == NULL ) )
+	{
+		fprintf( stderr, "FAIL: %s.%s by handle -> %d kind %u (%s), by name -> %d kind %u (%s)\n", blue_class_name( cls, NULL ), name, handleStatus, byHandle.kind,
+				 handleError.message ? handleError.message : "", nameStatus, byName.kind, nameError.message ? nameError.message : "" );
+		++s_failures;
+	}
+	blue_value_release( &byHandle );
+	blue_value_release( &byName );
+	blue_error_clear( &handleError );
+	blue_error_clear( &nameError );
+}
+
+static void TestMemberHandles( void )
+{
+	printf( "member handles\n" );
+	const BlueClass* attributesClass = blue_class_find( NAME( "BlueTestHelperAttributes" ) );
+	const BlueClass* propertiesClass = blue_class_find( NAME( "BlueTestHelperProperties" ) );
+	const BlueClass* memStreamClass = blue_class_find( NAME( "MemStream" ) );
+	const BlueClass* proxyClass = blue_class_find( NAME( "BlueObjectProxy" ) );
+	const BlueClass* asyncResClass = blue_class_find( NAME( "BlueAsyncRes" ) );
+	const BlueClass* testAsyncResClass = blue_class_find( NAME( "BlueTestAsyncRes" ) );
+	CHECK( attributesClass && propertiesClass && memStreamClass && proxyClass && asyncResClass && testAsyncResClass );
+	CHECK( blue_class_parent( testAsyncResClass ) == asyncResClass );
+
+	/* One handle per member, interned: found again, and through a subclass, it is the same */
+	const BlueMember* myInt = blue_member_find( attributesClass, NAME( "myInt" ) );
+	CHECK( myInt != NULL && blue_member_find( attributesClass, NAME( "myInt" ) ) == myInt );
+	const BlueMember* path = blue_member_find( testAsyncResClass, NAME( "path" ) );
+	CHECK( path != NULL && blue_member_find( asyncResClass, NAME( "path" ) ) == path );
+	const BlueMember* isGood = blue_member_find( testAsyncResClass, NAME( "isGood" ) );
+	CHECK( isGood != NULL && isGood != path && blue_member_find( asyncResClass, NAME( "isGood" ) ) == isGood );
+	/* Names are counted; methods are not members */
+	CHECK( blue_member_find( attributesClass, "myIntXYZ", 5 ) == myInt );
+	CHECK( blue_member_find( attributesClass, NAME( "nope" ) ) == NULL );
+	CHECK( blue_member_find( memStreamClass, NAME( "Read" ) ) == NULL );
+	CHECK( blue_member_find( NULL, NAME( "myInt" ) ) == NULL );
+	CHECK( blue_member_find( attributesClass, NULL, 5 ) == NULL );
+
+	/* An attribute: set and get by handle and by name see each other */
+	BlueObject* attributes = NULL;
+	CHECK_OK( blue_create( attributesClass, &attributes, &e_ ) );
+	BlueObject* properties = NULL;
+	CHECK_OK( blue_create( propertiesClass, &properties, &e_ ) );
+	BlueObject* stream = NULL;
+	CHECK_OK( blue_create( memStreamClass, &stream, &e_ ) );
+	BlueObject* proxy = NULL;
+	CHECK_OK( blue_create( proxyClass, &proxy, &e_ ) );
+	BlueObject* resource = NULL;
+	CHECK_OK( blue_create( testAsyncResClass, &resource, &e_ ) );
+	if( !attributes || !properties || !stream || !proxy || !resource )
+	{
+		blue_release( attributes );
+		blue_release( properties );
+		blue_release( stream );
+		blue_release( proxy );
+		blue_release( resource );
+		return;
+	}
+	BlueCValue value = IntValue( 7 );
+	CHECK_OK( blue_member_set( attributes, myInt, &value, &e_ ) );
+	CHECK( GetInt( attributes, "myInt" ) == 7 );
+	value = IntValue( 8 );
+	CHECK_OK( blue_set( attributes, NAME( "myInt" ), &value, &e_ ) );
+	CHECK_OK( blue_member_get( attributes, myInt, &value, &e_ ) );
+	CHECK( value.kind == BLUE_VK_INT && value.u.i == 8 );
+	blue_value_release( &value );
+	CheckGetMatches( attributes, attributesClass, "myInt" );
+	const char utf8[] = "gr\xc3\xbc\xc3\x9f";
+	CHECK_OK( blue_value_set_string( &value, NAME( utf8 ), &e_ ) );
+	CHECK_OK( blue_member_set( attributes, blue_member_find( attributesClass, NAME( "myUnicode" ) ), &value, &e_ ) );
+	blue_value_release( &value );
+	CheckGetMatches( attributes, attributesClass, "myUnicode" );
+	CheckGetMatches( attributes, attributesClass, "myVector" );
+
+	/* The same errors, prefixed with the member as blue_set does */
+	CHECK_OK( blue_value_set_string( &value, NAME( "x" ), &e_ ) );
+	CHECK_FAILS( blue_member_set( attributes, myInt, &value, &err_ ), BLUE_E_TYPE, "BlueTestHelperAttributes.myInt: " );
+	CHECK_FAILS( blue_set( attributes, NAME( "myInt" ), &value, &err_ ), BLUE_E_TYPE, "BlueTestHelperAttributes.myInt: " );
+	blue_value_release( &value );
+	value = IntValue( (int64_t)1 << 40 );
+	CHECK_FAILS( blue_member_set( attributes, myInt, &value, &err_ ), BLUE_E_OVERFLOW, "myInt" );
+	CHECK( GetInt( attributes, "myInt" ) == 8 );
+
+	/* A property */
+	const BlueMember* propertyInt = blue_member_find( propertiesClass, NAME( "myInt" ) );
+	CHECK( propertyInt != NULL && propertyInt != myInt );
+	value = IntValue( -5 );
+	CHECK_OK( blue_member_set( properties, propertyInt, &value, &e_ ) );
+	CHECK( GetInt( properties, "myInt" ) == -5 );
+	CheckGetMatches( properties, propertiesClass, "myInt" );
+	CheckGetMatches( properties, propertiesClass, "myDouble" );
+
+	/* Read-only: an attribute and a property */
+	const BlueMember* size = blue_member_find( memStreamClass, NAME( "size" ) );
+	CheckGetMatches( stream, memStreamClass, "size" );
+	value = IntValue( 3 );
+	CHECK_FAILS( blue_member_set( stream, size, &value, &err_ ), BLUE_E_READ_ONLY, "MemStream.size: " );
+	const BlueMember* isResident = blue_member_find( proxyClass, NAME( "isResident" ) );
+	CheckGetMatches( proxy, proxyClass, "isResident" );
+	value.kind = BLUE_VK_BOOL;
+	value.u.i = 1;
+	CHECK_FAILS( blue_member_set( proxy, isResident, &value, &err_ ), BLUE_E_READ_ONLY, "BlueObjectProxy.isResident: " );
+	CHECK_FAILS( blue_set( proxy, NAME( "isResident" ), &value, &err_ ), BLUE_E_READ_ONLY, "BlueObjectProxy.isResident: " );
+
+	/* A hidden attribute is skipped: "object" is the property that shares its name. Setting it
+	 * by handle is seen by name, and the value it holds is the object's root */
+	const BlueMember* object = blue_member_find( proxyClass, NAME( "object" ) );
+	CHECK( object != NULL );
+	value = ObjectValue( stream );
+	CHECK_OK( blue_member_set( proxy, object, &value, &e_ ) );
+	CheckGetMatches( proxy, proxyClass, "object" );
+	CHECK_OK( blue_member_get( proxy, object, &value, &e_ ) );
+	CHECK( value.kind == BLUE_VK_OBJECT && value.u.obj == stream );
+	blue_value_release( &value );
+
+	/* Members of a parent, on an instance of the subclass */
+	CheckGetMatches( resource, testAsyncResClass, "path" );
+	CheckGetMatches( resource, testAsyncResClass, "isGood" );
+	CheckGetMatches( resource, asyncResClass, "isLoading" );
+	CheckGetMatches( resource, testAsyncResClass, "ex" );
+
+	/* Another class's member: BLUE_E_SELF, out reset; a parent's member on a class that does not
+	 * derive from it, likewise */
+	value = IntValue( 1 );
+	CHECK_FAILS( blue_member_get( stream, myInt, &value, &err_ ), BLUE_E_SELF, "MemStream.myInt: object of class MemStream is not a BlueTestHelperAttributes" );
+	CHECK( value.kind == BLUE_VK_NONE );
+	value = IntValue( 1 );
+	CHECK_FAILS( blue_member_set( stream, myInt, &value, &err_ ), BLUE_E_SELF, "is not a BlueTestHelperAttributes" );
+	CHECK_FAILS( blue_member_get( attributes, path, &value, &err_ ), BLUE_E_SELF, "is not a BlueAsyncRes" );
+	CHECK_FAILS( blue_member_get( properties, myInt, &value, &err_ ), BLUE_E_SELF, "is not a BlueTestHelperAttributes" );
+	CHECK( GetInt( properties, "myInt" ) == -5 );
+
+	/* NULLs */
+	value = IntValue( 1 );
+	CHECK_FAILS( blue_member_get( attributes, NULL, &value, &err_ ), BLUE_E_INVALID_ARGUMENT, "without a member" );
+	CHECK( value.kind == BLUE_VK_NONE );
+	value = IntValue( 1 );
+	CHECK_FAILS( blue_member_set( attributes, NULL, &value, &err_ ), BLUE_E_INVALID_ARGUMENT, "without a member" );
+	CHECK_FAILS( blue_member_set( attributes, myInt, NULL, &err_ ), BLUE_E_INVALID_ARGUMENT, "myInt" );
+	CHECK_FAILS( blue_member_get( NULL, myInt, &value, &err_ ), BLUE_E_SELF, "without an object" );
+	CHECK_FAILS( blue_member_set( NULL, myInt, &value, &err_ ), BLUE_E_SELF, "without an object" );
+	CHECK( blue_member_get( NULL, myInt, &value, NULL ) == BLUE_E_SELF );
+	/* out may be NULL, as for blue_get */
+	CHECK_OK( blue_member_get( attributes, myInt, NULL, &e_ ) );
+
+	blue_release( resource );
+	blue_release( proxy );
+	blue_release( stream );
+	blue_release( properties );
+	blue_release( attributes );
+}
+
+/* One object, one pointer (1.3): what blue hands out is the object's root */
+static void TestObjectIdentity( void )
+{
+	printf( "object identity\n" );
+	BlueObject* stream = NULL;
+	CHECK_OK( blue_create( blue_class_find( NAME( "MemStream" ) ), &stream, &e_ ) );
+	if( !stream )
+	{
+		return;
+	}
+	/* ICacheable is MemStream's second base: its interface pointer is not the object's root */
+	static const char* const interfaces[] = { "IRoot", "MemStream", "IBlueMemStream", "IBlueStream", "ICacheable" };
+	for( size_t i = 0; i < sizeof( interfaces ) / sizeof( interfaces[0] ); ++i )
+	{
+		CHECK( IsSameObject( stream, interfaces[i] ) );
+	}
+	/* Each query added a reference, and each release dropped one: the object is still there */
+	CHECK( GetInt( stream, "size" ) == 0 );
+
+	BlueObject* resource = NULL;
+	CHECK_OK( blue_create( blue_class_find( NAME( "BlueTestAsyncRes" ) ), &resource, &e_ ) );
+	CHECK( resource && IsSameObject( resource, "ICacheable" ) && IsSameObject( resource, "IBlueResource" ) );
+	blue_release( resource );
+
+	/* Values: AllReferences keeps the root it is given and hands it back */
+	BlueObject* allReferences = NULL;
+	CHECK_OK( blue_create( blue_class_find( NAME( "AllReferences" ) ), &allReferences, &e_ ) );
+	if( allReferences )
+	{
+		BlueCValue root = ObjectValue( stream );
+		BlueCValue out;
+		InvokeByName( allReferences, "SetRoot", &root, 1, NULL );
+		InvokeByName( allReferences, "GetRoot", NULL, 0, &out );
+		CHECK( out.kind == BLUE_VK_OBJECT && out.u.obj == stream );
+		blue_value_release( &out );
+		blue_release( allReferences );
+	}
+	blue_release( stream );
+}
+
 static void TestModule( void )
 {
 	printf( "module objects, enums, functions\n" );
@@ -531,6 +796,8 @@ static void TestModule( void )
 			++s_failures;
 		}
 		blue_error_clear( &err );
+		/* The object's root (1.3) */
+		CHECK( !obj || IsSameObject( obj, "IRoot" ) );
 		blue_release( obj );
 	}
 	printf( "\n" );
@@ -1703,6 +1970,8 @@ static int RunAll( void )
 		TestClasses();
 		TestStreams();
 		TestMembers();
+		TestMemberHandles();
+		TestObjectIdentity();
 		TestModule();
 		TestClassKinds();
 		TestMemStreamIntrospection();
@@ -1747,7 +2016,11 @@ static int RunNoShutdown( void )
 	char appDir[4096];
 	MakeTempDir( appDir, sizeof( appDir ) );
 	printf( "exiting without blue_shutdown\n" );
+	/* As a host built against 1.0-1.2 passes the options: sizeof 48, the 4 bytes after
+	 * search_path_count (now reserved) left as they were */
 	BlueInitOptions options = Options( appDir );
+	memset( (char*)&options + offsetof( BlueInitOptions, search_path_count ) + sizeof( uint32_t ), 0xa5, 4 );
+	CHECK( options.struct_size == 48 && options.reserved == 0xa5a5a5a5u );
 	CHECK_OK( blue_initialize( &options, &e_ ) );
 	BlueObject* stream = NULL;
 	CHECK_OK( blue_create( blue_class_find( NAME( "MemStream" ) ), &stream, &e_ ) );

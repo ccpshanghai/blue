@@ -9,6 +9,9 @@
  *   - Outputs (out values, err->message) belong to the caller and are freed with
  *     blue_value_release / blue_error_clear. An object handed out carries one reference (+1),
  *     dropped with blue_release. out is overwritten without being released.
+ *   - Every BlueObject* blue hands out (blue_create, blue_query_interface,
+ *     blue_module_object_get, object values and callback arguments) is the object's root, so two
+ *     live handles are the same object exactly when the pointers are equal (1.3).
  *   - err must be { BLUE_OK, NULL, 0 } or hold an earlier error (filling it frees the old
  *     message). It may be NULL. It is left untouched on success, so test the returned status,
  *     not err->code.
@@ -35,6 +38,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* This header is written against the 1.x value types of BlueCAbi.h */
+#if BLUE_CABI_VERSION_MAJOR != 1
+#error "blue.h 1.x needs BlueCAbi.h 1.x (BLUE_CABI_VERSION_MAJOR 1)"
+#endif
+
 #if defined( _WIN32 )
 #if defined( BLUE_CAPI_BUILD )
 #define BLUE_CAPI __declspec( dllexport )
@@ -56,17 +64,18 @@ extern "C" {
  * bumps the major version. A host built against major M must refuse a blue with another major.
  *------------------------------------------------------------------------------------------*/
 #define BLUE_CAPI_VERSION_MAJOR 1
-#define BLUE_CAPI_VERSION_MINOR 2
+#define BLUE_CAPI_VERSION_MINOR 3
 #define BLUE_CAPI_VERSION ( ( BLUE_CAPI_VERSION_MAJOR << 16 ) | BLUE_CAPI_VERSION_MINOR )
 
 /* (major << 16) | minor of the blue that is loaded */
 BLUE_CAPI uint32_t BLUE_CALL blue_abi_version( void );
 
 /*--------------------------------------------------------------------------------------------
- * Handles. Classes, methods and functions live as long as the process; objects (BlueObject,
- * from BlueCAbi.h) are reference counted.
+ * Handles. Classes, members, methods and functions live as long as the process; objects
+ * (BlueObject, from BlueCAbi.h) are reference counted.
  *------------------------------------------------------------------------------------------*/
 typedef struct BlueClass BlueClass;			/* an exposed class */
+typedef struct BlueMember BlueMember;		/* an attribute or property of a class (1.3) */
 typedef struct BlueMethod BlueMethod;		/* a method of a class or of an interface it maps */
 typedef struct BlueFunction BlueFunction;	/* a module function */
 
@@ -75,7 +84,7 @@ typedef struct BlueFunction BlueFunction;	/* a module function */
  *
  * BlueInitOptions grows only at its end, in minor versions; blue reads only the fields that
  * struct_size covers (later ones count as zero), so a host built against an older minor
- * version keeps working. Every field below is part of 1.0.
+ * version keeps working. Every field up to search_path_count is part of 1.0 and required.
  *------------------------------------------------------------------------------------------*/
 typedef struct BlueInitOptions
 {
@@ -85,7 +94,21 @@ typedef struct BlueInitOptions
 	uint32_t arg_count;
 	const char* const* search_paths;	/* "<key>=<directory>", such as "res=/data/res"; may be NULL */
 	uint32_t search_path_count;
+	/* Never read (1.3): it names the tail padding that hosts built against 1.0-1.2 left
+	 * uninitialised, so it can never hold a field. Fields added later start at offset 48 (x64). */
+	uint32_t reserved;
 } BlueInitOptions;
+
+/* The x64 layout hosts mirror: reserved at 44, 48 bytes in all */
+#if defined( __LP64__ ) || defined( _WIN64 )
+#if defined( __cplusplus ) && __cplusplus >= 201103L
+static_assert( offsetof( BlueInitOptions, reserved ) == 44, "BlueInitOptions.reserved is at 44" );
+static_assert( sizeof( BlueInitOptions ) == 48, "BlueInitOptions is 48 bytes" );
+#elif defined( __STDC_VERSION__ ) && __STDC_VERSION__ >= 201112L
+_Static_assert( offsetof( BlueInitOptions, reserved ) == 44, "BlueInitOptions.reserved is at 44" );
+_Static_assert( sizeof( BlueInitOptions ) == 48, "BlueInitOptions is 48 bytes" );
+#endif
+#endif
 
 /* Start blue on the calling thread, which becomes the main thread. Strings in options are
  * UTF-8 and NUL-terminated. Fails with BLUE_E_FAILED when blue is already running, or has run
@@ -187,12 +210,14 @@ BLUE_CAPI const char* BLUE_CALL blue_class_interface_at( const BlueClass* cls, s
  * Objects
  *------------------------------------------------------------------------------------------*/
 
-/* A new instance of cls in *out (+1). BLUE_E_UNSUPPORTED for a class blue_class_is_abstract
- * reports. */
+/* A new instance of cls in *out (+1, the object's root). BLUE_E_UNSUPPORTED for a class
+ * blue_class_is_abstract reports. */
 BLUE_CAPI int32_t BLUE_CALL blue_create( const BlueClass* cls, BlueObject** out, BlueCError* err );
 
-/* obj as the interface named iid (a C++ interface name such as "IBlueStream", or a class name)
- * in *out (+1); BLUE_E_NOT_FOUND if obj does not implement it */
+/* Whether obj implements the interface named iid (a C++ interface name such as "IBlueStream",
+ * or a class name): if so, *out receives one more reference (+1) to the same object, its root,
+ * so *out == obj for any handle blue gave out (1.3; before, an interface pointer that could
+ * differ). BLUE_E_NOT_FOUND if obj does not implement it. */
 BLUE_CAPI int32_t BLUE_CALL blue_query_interface( BlueObject* obj, const char* iid, size_t iid_len, BlueObject** out, BlueCError* err );
 
 /* Add or drop one reference; NULL is ignored. The last release destroys the object on the
@@ -202,9 +227,24 @@ BLUE_CAPI void BLUE_CALL blue_release( BlueObject* obj );
 
 /*--------------------------------------------------------------------------------------------
  * Members: attributes and properties, looked up in the object's class and then its parents
+ * (hidden ones skipped)
  *------------------------------------------------------------------------------------------*/
 BLUE_CAPI int32_t BLUE_CALL blue_get( BlueObject* obj, const char* name, size_t name_len, BlueCValue* out, BlueCError* err );
 BLUE_CAPI int32_t BLUE_CALL blue_set( BlueObject* obj, const char* name, size_t name_len, const BlueCValue* value, BlueCError* err );
+
+/* The member named name that blue_get and blue_set find on an instance of cls (its own, then
+ * its parents'; hidden ones skipped), resolved once; NULL if there is none, for a NULL cls or
+ * name, and off the main thread or outside the running state. It lives as long as the process,
+ * and the same member gives the same handle, whichever class it was found through. (1.3) */
+BLUE_CAPI const BlueMember* BLUE_CALL blue_member_find( const BlueClass* cls, const char* name, size_t name_len );
+
+/* blue_get / blue_set of member, without looking it up by name: the same results and statuses.
+ * obj must be an instance of the class that declares member (the class it was found through, or
+ * the parent that member belongs to) or of a subclass of it; otherwise, and for a NULL obj,
+ * BLUE_E_SELF. BLUE_E_INVALID_ARGUMENT for a NULL member, and for a NULL value. Every failure's
+ * message starts with "<class of obj>.<member>: ", except for a NULL member. (1.3) */
+BLUE_CAPI int32_t BLUE_CALL blue_member_get( BlueObject* obj, const BlueMember* member, BlueCValue* out, BlueCError* err );
+BLUE_CAPI int32_t BLUE_CALL blue_member_set( BlueObject* obj, const BlueMember* member, const BlueCValue* value, BlueCError* err );
 
 /* BlueMemberInfo.flags (1.1) */
 #define BLUE_MEMBER_READABLE 0x1u	/* blue_get reads it */
@@ -296,8 +336,8 @@ BLUE_CAPI size_t BLUE_CALL blue_module_object_count( void );
 /* The name of module object index, NUL-terminated, or NULL; len (optional) receives its length */
 BLUE_CAPI const char* BLUE_CALL blue_module_object_name( size_t index, size_t* len );
 
-/* The module object named name in *out (+1); BLUE_E_NOT_FOUND for an unknown name or one that
- * is not set */
+/* The module object named name in *out (+1, the object's root); BLUE_E_NOT_FOUND for an unknown
+ * name or one that is not set */
 BLUE_CAPI int32_t BLUE_CALL blue_module_object_get( const char* name, size_t name_len, BlueObject** out, BlueCError* err );
 
 /*--------------------------------------------------------------------------------------------
