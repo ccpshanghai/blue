@@ -131,6 +131,9 @@ public:
 
 	void SetEx( bool b );
 
+	// Test only: abandons a pending load (CancelPendingLoad), which notifies nobody
+	void CancelLoadForTest();
+
 	//////////////////////////////////////////////////////////////////////////
 	// ICacheable
 	bool IsMemoryUsageKnown() override;

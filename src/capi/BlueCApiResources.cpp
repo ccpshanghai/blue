@@ -4,6 +4,11 @@
 // how a load ended and hands it to the host from blue_pump (or blue_shutdown), outside blue's
 // notify loop: BlueAsyncRes::NotifyRebuildCachedData calls the targets in a loop that a
 // target removed, or a resource released, inside it would break.
+//
+// The notification is not the only way a wait is decided (1.3): blue does not notify a load
+// whose DoLoad returns LR_SUCCESS_DONTNOTIFY, nor one CancelPendingLoad abandons. So each
+// delivery first reads the state of every resource still waited for, and a wait decided
+// READY or FAILED whose resource is loading again (a Reload since) waits for that load.
 
 #include "StdAfx.h"
 
@@ -43,6 +48,51 @@ public:
 	// Record the outcome (the first one wins) and queue the waiter for delivery
 	void Decide( int32_t state );
 
+	// blue_resource_wait_cancel: CANCELLED unless decided already
+	void Cancel()
+	{
+		m_cancelled = true;
+		Decide( BLUE_RESOURCE_CANCELLED );
+	}
+
+	bool IsDecided() const
+	{
+		return m_state != 0;
+	}
+
+	// For a wait not decided yet, from the resource's state: nothing while it loads, READY or
+	// FAILED once it is prepared, FAILED when it is neither (a load blue abandoned)
+	void Poll()
+	{
+		if( m_state != 0 || m_resource->IsLoading() )
+		{
+			return;
+		}
+		if( m_resource->IsPrepared() )
+		{
+			Decide( m_resource->IsGood() ? BLUE_RESOURCE_READY : BLUE_RESOURCE_FAILED );
+		}
+		else
+		{
+			Decide( BLUE_RESOURCE_FAILED );
+		}
+	}
+
+	// Decided READY or FAILED, not cancelled, and the resource is loading again (a Reload
+	// since the decision): that load is waited for
+	bool IsLoadingAgain() const
+	{
+		return IsLoadEnd( m_state ) && !m_cancelled && m_resource->IsLoading();
+	}
+
+	// Back to pending, out of Due() (the caller took it out): decided again by a notification,
+	// when it is a notify target, or by the poll of a later delivery
+	void Undecide()
+	{
+		m_state = 0;
+		m_due = false;
+	}
+
 	// From the resource's own state, for a resource that is prepared already
 	void DecideFromResource()
 	{
@@ -65,7 +115,19 @@ public:
 			m_registered = false;
 			m_resource->RemoveNotifyTarget( this );
 		}
-		const int32_t state = m_state ? m_state : pendingState;
+		int32_t state = m_state ? m_state : pendingState;
+		if( IsLoadEnd( state ) && m_resource->IsLoading() )
+		{
+			// Loading again since it was decided, and ended first by a cancel or by blue_shutdown
+			if( m_cancelled )
+			{
+				state = BLUE_RESOURCE_CANCELLED;
+			}
+			else if( pendingState )
+			{
+				state = pendingState;
+			}
+		}
 		try
 		{
 			m_fn( m_userData, state );
@@ -93,12 +155,18 @@ protected:
 	}
 
 private:
+	static bool IsLoadEnd( int32_t state )
+	{
+		return state == BLUE_RESOURCE_READY || state == BLUE_RESOURCE_FAILED;
+	}
+
 	uint64_t m_id;
 	BlueResourceWaitFn m_fn;
 	void* m_userData;
 	BlueAsyncResPtr m_resource;		// one reference until delivered
 	bool m_registered = false;		// AddNotifyTarget done, RemoveNotifyTarget pending
 	bool m_due = false;				// in Due()
+	bool m_cancelled = false;		// blue_resource_wait_cancel called
 	int32_t m_state = 0;			// a BlueResourceState once decided, 0 while pending
 };
 
@@ -133,6 +201,24 @@ void Waiter::Decide( int32_t state )
 	{
 		m_due = true;
 		Due().push_back( m_id );
+	}
+}
+
+// Decide every wait not decided yet whose resource is no longer loading, in id order
+void PollWaits()
+{
+	std::vector<Waiter*> undecided;
+	for( const auto& entry : AllWaiters() )
+	{
+		if( !entry.second->IsDecided() )
+		{
+			undecided.push_back( entry.second.get() );
+		}
+	}
+	std::sort( undecided.begin(), undecided.end(), []( const Waiter* a, const Waiter* b ) { return a->Id() < b->Id(); } );
+	for( Waiter* waiter : undecided )
+	{
+		waiter->Poll();
 	}
 }
 
@@ -171,11 +257,27 @@ void DeliverResourceWaits()
 		return;
 	}
 	s_delivering = true;
+	try
+	{
+		PollWaits();
+	}
+	catch( ... )
+	{
+		// Out of memory: the notified waits are still delivered; the rest at the next pump
+	}
 	// The ones decided so far; a wait decided while these run waits for the next pump
 	std::vector<uint64_t> due;
 	due.swap( Due() );
+	Waiters& waiters = AllWaiters();
 	for( uint64_t id : due )
 	{
+		auto found = waiters.find( id );
+		if( found != waiters.end() && found->second->IsLoadingAgain() )
+		{
+			// Reloaded since it was decided: stays in the registry for that load
+			found->second->Undecide();
+			continue;
+		}
 		TakeAndDeliver( id, 0 );
 	}
 	s_delivering = false;
@@ -185,7 +287,15 @@ void ShutDownResourceWaits()
 {
 	// Decided ones first, in their order, then the rest by id: the pending ones get SHUTDOWN.
 	// (The rest can hold decided ones too, when blue_shutdown runs inside an fn that
-	// blue_pump delivers.)
+	// blue_pump delivers.) A load that ended without a notification counts as decided.
+	try
+	{
+		PollWaits();
+	}
+	catch( ... )
+	{
+		// Out of memory: the ones not polled end as SHUTDOWN
+	}
 	std::vector<uint64_t> ids;
 	ids.swap( Due() );
 	std::vector<uint64_t> rest;
@@ -283,7 +393,7 @@ int32_t blue_resource_wait_cancel( uint64_t id, BlueCError* err )
 		}
 		// A decided waiter keeps its state; either way blue_pump delivers it, so no notify
 		// list is edited here (this may run inside another notification)
-		found->second->Decide( BLUE_RESOURCE_CANCELLED );
+		found->second->Cancel();
 		return BLUE_OK;
 	} );
 }

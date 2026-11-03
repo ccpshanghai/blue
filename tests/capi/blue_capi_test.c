@@ -1444,8 +1444,9 @@ static void TestValues( void )
  * Resource waits (1.2), on BlueTestAsyncRes (extension "blueasync"). It reads its behaviour
  * from the first two characters of the path as given, so the names are bare ("ss1.blueasync";
  * a "res:/" name always succeeds): first s loads in 10 ms, l in 100 ms, n fails the load, f
- * fails opening the stream; second s prepares in 1 ms, f fails the prepare. Failed test
- * resources stay cached, so every case takes a fresh name.
+ * fails opening the stream, d loads at once without notifying (LR_SUCCESS_DONTNOTIFY); second
+ * s prepares in 1 ms, f fails the prepare. Failed test resources stay cached, so every case
+ * takes a fresh name.
  *------------------------------------------------------------------------------------------*/
 
 static pthread_t s_mainThread;
@@ -1826,6 +1827,120 @@ static void TestPumpInsideNotifyLoop( BlueObject* resMan )
 	blue_release( prepared );
 }
 
+static int32_t CountLoaded( void* userData, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err )
+{
+	(void)args;
+	(void)argc;
+	(void)out;
+	(void)err;
+	++*(int*)userData;
+	return BLUE_OK;
+}
+
+/* Waits that blue's notification alone would never end, or would end too early (1.3): each
+ * delivering blue_pump reads the state of the resources still waited for */
+static void TestResourceWaitsWithoutNotify( BlueObject* resMan )
+{
+	printf( "resource waits: loads blue does not notify, reloads\n" );
+	char path[64];
+
+	/* DoLoad returns LR_SUCCESS_DONTNOTIFY: prepared and good, but no target is notified (a
+	 * ResourceWatch's onLoaded never runs); the wait still ends READY */
+	ResourcePath( path, sizeof( path ), "ds" );
+	BlueObject* resource = GetResource( resMan, path );
+	BlueObject* watch = NULL;
+	int loaded = 0; /* outlives the watch, which holds the callback */
+	CHECK_OK( blue_create( blue_class_find( NAME( "ResourceWatch" ) ), &watch, &e_ ) );
+	if( resource && watch )
+	{
+		BlueCCallback onLoaded = { CountLoaded, &loaded, NULL };
+		BlueCallbackHandle* handle = blue_callback_create( &onLoaded, NULL );
+		CHECK( handle != NULL );
+		BlueCValue value;
+		memset( &value, 0, sizeof( value ) );
+		value.kind = BLUE_VK_CALLBACK;
+		value.u.callback = handle;
+		CHECK_OK( blue_set( watch, NAME( "onLoaded" ), &value, &e_ ) );
+		blue_callback_release( handle );
+		BlueCValue arg = ObjectValue( resource );
+		InvokeByName( watch, "Watch", &arg, 1, NULL );
+
+		WaitRecord record = { 0, 0, 0, 0 };
+		StartWait( resource, &record );
+		const int frames = PumpUntil( &record.calls, 5000 );
+		printf( "  %s -> state %d after %d pump(s), onLoaded ran %d time(s)\n", path, record.state, frames, loaded );
+		CHECK( record.calls == 1 && record.state == BLUE_RESOURCE_READY );
+		CHECK( record.onMainThread && !record.insideWaitCall );
+		CHECK( GetFlag( resource, "isPrepared" ) == 1 && GetFlag( resource, "isGood" ) == 1 );
+		CHECK( loaded == 0 );
+		for( int i = 0; i < 3; ++i )
+		{
+			CHECK_OK( blue_pump( &e_ ) );
+		}
+		CHECK( record.calls == 1 && loaded == 0 );
+	}
+	blue_release( watch );
+	blue_release( resource );
+
+	/* Decided READY (prepared already), then reloaded before the pump: the wait ends READY once
+	 * the reload has finished, not before. A wait cancelled after the reload ends CANCELLED */
+	ResourcePath( path, sizeof( path ), "ls" );
+	resource = GetResource( resMan, path );
+	if( resource )
+	{
+		PumpUntilLoaded( resource );
+		CHECK( GetFlag( resource, "isGood" ) == 1 );
+		WaitRecord record = { 0, 0, 0, 0 };
+		WaitRecord cancelled = { 0, 0, 0, 0 };
+		StartWait( resource, &record );
+		const uint64_t cancelledId = StartWait( resource, &cancelled );
+		InvokeByName( resource, "Reload", NULL, 0, NULL );
+		CHECK( GetFlag( resource, "isLoading" ) == 1 );
+		CHECK_OK( blue_resource_wait_cancel( cancelledId, &e_ ) );
+		CHECK_OK( blue_pump( &e_ ) );
+		CHECK( record.calls == 0 );
+		CHECK( cancelled.calls == 1 && cancelled.state == BLUE_RESOURCE_CANCELLED );
+		int frames = 1;
+		while( record.calls == 0 && frames < 5000 )
+		{
+			CHECK( GetFlag( resource, "isLoading" ) == 1 );
+			CHECK_OK( blue_pump( &e_ ) );
+			++frames;
+			if( record.calls == 0 )
+			{
+				SleepOneMillisecond();
+			}
+		}
+		printf( "  %s reloaded -> state %d after %d pump(s)\n", path, record.state, frames );
+		CHECK( record.calls == 1 && record.state == BLUE_RESOURCE_READY && record.onMainThread );
+		CHECK( GetFlag( resource, "isLoading" ) == 0 && GetFlag( resource, "isPrepared" ) == 1 && GetFlag( resource, "isGood" ) == 1 );
+		for( int i = 0; i < 3; ++i )
+		{
+			CHECK_OK( blue_pump( &e_ ) );
+		}
+		CHECK( record.calls == 1 && cancelled.calls == 1 );
+		blue_release( resource );
+	}
+
+	/* A load blue abandons (CancelPendingLoad, which notifies nobody): neither loading nor
+	 * prepared, so the next pump ends the wait FAILED */
+	ResourcePath( path, sizeof( path ), "ls" );
+	resource = GetResource( resMan, path );
+	if( resource )
+	{
+		WaitRecord record = { 0, 0, 0, 0 };
+		StartWait( resource, &record );
+		InvokeByName( resource, "CancelLoadForTest", NULL, 0, NULL );
+		CHECK( GetFlag( resource, "isLoading" ) == 0 && GetFlag( resource, "isPrepared" ) == 0 );
+		CHECK( record.calls == 0 );
+		CHECK_OK( blue_pump( &e_ ) );
+		printf( "  %s abandoned -> state %d\n", path, record.state );
+		CHECK( record.calls == 1 && record.state == BLUE_RESOURCE_FAILED && record.onMainThread );
+		CHECK( GetFlag( resource, "isGood" ) == 0 );
+		blue_release( resource );
+	}
+}
+
 static void TestResourceWaits( void )
 {
 	printf( "resource waits\n" );
@@ -1933,6 +2048,8 @@ static void TestResourceWaits( void )
 		CHECK( record.calls == 1 );
 		blue_release( resource );
 	}
+
+	TestResourceWaitsWithoutNotify( resMan );
 	blue_release( resMan );
 }
 

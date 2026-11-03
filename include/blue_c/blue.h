@@ -374,7 +374,7 @@ BLUE_CAPI const char* BLUE_CALL blue_enum_value_doc( size_t index, size_t value_
 typedef enum BlueResourceState
 {
 	BLUE_RESOURCE_READY = 1,		/* loaded and prepared: the resource's isGood is 1 */
-	BLUE_RESOURCE_FAILED = 2,		/* finished, but not good: isPrepared is 1, isGood 0 */
+	BLUE_RESOURCE_FAILED = 2,		/* finished without a good resource (isGood 0), also a load blue abandoned */
 	BLUE_RESOURCE_CANCELLED = 3,	/* blue_resource_wait_cancel ended the wait first */
 	BLUE_RESOURCE_SHUTDOWN = 4		/* blue_shutdown ended the wait first */
 } BlueResourceState;
@@ -388,7 +388,10 @@ typedef void ( BLUE_CALL *BlueResourceWaitFn )( void* user_data, int32_t state )
  * never runs inside this call, also when the resource has already finished; then the next
  * blue_pump delivers it. fn should only record the state: it may call the functions that are
  * callable from any thread, nothing else (a blue_pump inside it delivers nothing). A reload
- * while waiting is waited for too.
+ * while waiting is waited for too, also one that starts after the load had finished but before
+ * the blue_pump that would deliver it. Since 1.3 each delivering blue_pump also reads the state
+ * of every resource still waited for, so a wait ends even when blue finishes or abandons a load
+ * without notifying (FAILED for a load that is neither running nor finished).
  *
  * The wait holds a reference to resource until fn has run. *out_id receives a non-zero id,
  * unique in the process, for blue_resource_wait_cancel; it is 0 when the call fails.
@@ -398,8 +401,8 @@ typedef void ( BLUE_CALL *BlueResourceWaitFn )( void* user_data, int32_t state )
 BLUE_CAPI int32_t BLUE_CALL blue_resource_wait( BlueObject* resource, BlueResourceWaitFn fn, void* user_data, uint64_t* out_id, BlueCError* err );
 
 /* End wait id early: its fn runs with BLUE_RESOURCE_CANCELLED from the next blue_pump, unless the
- * load has already finished, in which case it runs with READY or FAILED. The load itself goes
- * on. BLUE_E_NOT_FOUND for an id that is unknown or whose fn has already run. (1.2) */
+ * load has already finished, in which case it runs with READY or FAILED (CANCELLED again if the
+ * resource is loading anew by then). The load itself goes on. BLUE_E_NOT_FOUND for an id that is unknown or whose fn has already run. (1.2) */
 BLUE_CAPI int32_t BLUE_CALL blue_resource_wait_cancel( uint64_t id, BlueCError* err );
 
 /*--------------------------------------------------------------------------------------------

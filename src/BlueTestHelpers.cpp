@@ -157,6 +157,8 @@ void BlueTestHelperProperties::SetUnicode( const std::wstring& val )
 //  n - fails to load
 //  s - short load - sleeps for ~10ms
 //  l - long load - sleeps for ~100ms
+//  d - loads at once, but DoLoad returns LR_SUCCESS_DONTNOTIFY: the resource is prepared
+//      without notifying its targets
 //
 // Second character:
 //  f - fails to prepare
@@ -208,6 +210,11 @@ BlueAsyncRes::LoadingResult BlueTestAsyncRes::DoLoad()
 		return LR_FAILED;
 	}
 
+	if( path[0] == L'd' )
+	{
+		return LR_SUCCESS_DONTNOTIFY;
+	}
+
 	if( path[0] == L's' )
 	{
 		CcpThreadSleep( 10 ); // todo - randomize this?
@@ -243,6 +250,12 @@ bool BlueTestAsyncRes::DoPrepare()
 void BlueTestAsyncRes::SetEx( bool b )
 {
 	m_ex = true;
+}
+
+void BlueTestAsyncRes::CancelLoadForTest()
+{
+	// Abandons a load without notifying: the resource is then neither loading nor prepared
+	CancelPendingLoad();
 }
 
 

@@ -232,6 +232,8 @@ const Be::ClassInfo* BlueTestAsyncRes::ExposeToBlue()
 
 		MAP_ATTRIBUTE( "ex", m_ex, "Set to True when loaded with 'ex' extra parameter", Be::READ )
 
+		MAP_METHOD_AND_WRAP( "CancelLoadForTest", CancelLoadForTest, "Test only: abandons the pending load without notifying (CancelPendingLoad)" )
+
 	EXPOSURE_CHAINTO( BlueAsyncRes )
 }
 
