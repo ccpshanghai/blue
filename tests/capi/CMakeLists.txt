@@ -50,7 +50,9 @@ add_test(NAME BlueCApiTest COMMAND BlueCApiTest)
 add_test(NAME BlueCApiTest.InitFailure COMMAND BlueCApiTest init-failure)
 add_test(NAME BlueCApiTest.NoShutdown COMMAND BlueCApiTest no-shutdown)
 add_test(NAME BlueCApiTest.ResourceWaitShutdown COMMAND BlueCApiTest resource-wait-shutdown)
+add_test(NAME BlueCApiTest.ServerFailedCallback COMMAND BlueCApiTest server-failed-callback)
 set_tests_properties(BlueCApiTest BlueCApiTest.InitFailure BlueCApiTest.NoShutdown BlueCApiTest.ResourceWaitShutdown
+    BlueCApiTest.ServerFailedCallback
     PROPERTIES ENVIRONMENT "${BLUE_CAPI_TEST_ENVIRONMENT}"
 )
 

@@ -67,7 +67,9 @@ private:
 	bool m_verifyContentsOnSave;
 	bool m_verifyContentsOnLoad;
 
+	// Read on the async loader thread, assigned on the main thread
 	BlueScriptCallback m_on_server_failed_callback;
+	CcpMutex m_onServerFailedCallbackMutex;
 
 private:
 	bool AddFileIndexFromStream( IBlueStream* stream );
@@ -78,6 +80,9 @@ private:
 	void AddResPathToFolderIndex( const std::string& resPath );
 	bool ValidateResPath( const wchar_t* resPath, std::string& validatedPath );
 	void CacheContentsOfRemoteStream( class BlueRemoteStream* stream, const std::wstring& cachedName, const wchar_t* resPath );
+
+	// Calls the server-failed callback, if one is registered
+	void ReportServerFailed( const char* server, const wchar_t* resPath, const char* url );
 
 	bool TryDownload( std::string server, std::string filename, BlueRemoteStream* remoteStream, size_t expectedSize, const wchar_t* resPath );
 

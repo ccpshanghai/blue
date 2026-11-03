@@ -8,6 +8,9 @@
  *   BlueCApiTest no-shutdown     exiting while blue still runs (with a resource wait open)
  *   BlueCApiTest resource-wait-shutdown
  *                                blue_shutdown ending the resource waits still open
+ *   BlueCApiTest server-failed-callback
+ *                                RemoteFileCache's server-failed callback re-registered while
+ *                                blue runs it on the async loader thread
  *
  * Blue starts once per process, hence one mode per process. Temporary directories go to
  * $TMPDIR (default /tmp).
@@ -19,6 +22,7 @@
 
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2182,6 +2186,156 @@ static int RunNoShutdown( void )
 	return s_failures;
 }
 
+/*------------------------------------------------------------------------------------------
+ * RemoteFileCache's server-failed callback. Blue calls it on its async loader thread after a
+ * download fails (resource load → BluePaths → the remote file system → the global
+ * remoteFileCache), while the main thread may replace it. The test points both servers at a
+ * port that refuses the connection, so every download fails at once.
+ *------------------------------------------------------------------------------------------*/
+
+typedef struct ServerFailed
+{
+	int block;					/* the first call waits until the main thread re-registered */
+	atomic_int calls;
+	atomic_int entered;			/* the first call is running */
+	atomic_int reregistered;	/* the main thread has replaced the callback */
+	atomic_int destroyed;
+	int destroyedDuringCall;	/* destroy had run when the blocked call went on */
+	int onLoaderThread;			/* every call came off the main thread */
+	int destroyedOnMainThread;
+	char server[16];			/* the first argument of the last call */
+} ServerFailed;
+
+static int32_t ServerFailedCall( void* userData, const BlueCValue* args, uint32_t argc, BlueCValue* out, BlueCError* err )
+{
+	(void)out;
+	(void)err;
+	ServerFailed* record = (ServerFailed*)userData;
+	record->onLoaderThread = !pthread_equal( pthread_self(), s_mainThread );
+	if( argc == 3 && args[0].kind == BLUE_VK_STRING && args[0].u.str.len < sizeof( record->server ) )
+	{
+		memcpy( record->server, args[0].u.str.ptr, args[0].u.str.len );
+		record->server[args[0].u.str.len] = 0;
+	}
+	if( atomic_fetch_add( &record->calls, 1 ) == 0 && record->block )
+	{
+		atomic_store( &record->entered, 1 );
+		for( int i = 0; i < 10000 && !atomic_load( &record->reregistered ); ++i )
+		{
+			SleepOneMillisecond();
+		}
+		record->destroyedDuringCall = atomic_load( &record->destroyed );
+	}
+	return BLUE_OK;
+}
+
+static void ServerFailedDestroy( void* userData )
+{
+	ServerFailed* record = (ServerFailed*)userData;
+	record->destroyedOnMainThread = pthread_equal( pthread_self(), s_mainThread ) ? 1 : 0;
+	atomic_fetch_add( &record->destroyed, 1 );
+}
+
+/* obj.name = text */
+static void SetString( BlueObject* obj, const char* name, const char* text )
+{
+	BlueCValue value;
+	CHECK_OK( blue_value_set_string( &value, text, strlen( text ), &e_ ) );
+	CHECK_OK( blue_set( obj, name, strlen( name ), &value, &e_ ) );
+	blue_value_release( &value );
+}
+
+/* obj.method( text ) */
+static void InvokeWithString( BlueObject* obj, const char* method, const char* text )
+{
+	BlueCValue arg;
+	CHECK_OK( blue_value_set_string( &arg, text, strlen( text ), &e_ ) );
+	InvokeByName( obj, method, &arg, 1, NULL );
+	blue_value_release( &arg );
+}
+
+/* cache.RegisterOnServerFailedCallback( a new callback recording into record, or None ); blue
+ * holds the only reference */
+static void RegisterServerFailed( BlueObject* cache, ServerFailed* record )
+{
+	BlueCValue arg;
+	memset( &arg, 0, sizeof( arg ) );
+	if( record )
+	{
+		BlueCCallback callback = { ServerFailedCall, record, ServerFailedDestroy };
+		arg.kind = BLUE_VK_CALLBACK;
+		arg.u.callback = blue_callback_create( &callback, NULL );
+		CHECK( arg.u.callback != NULL );
+	}
+	InvokeByName( cache, "RegisterOnServerFailedCallback", &arg, 1, NULL );
+	blue_value_release( &arg );
+}
+
+/* The main thread replaces the callback while blue runs it on the loader thread: the call
+ * holds a reference of its own, so the old callback is destroyed after it returned, on the
+ * loader thread; the backup server's failure goes to the new callback */
+static int RunServerFailedCallback( void )
+{
+	char appDir[4096];
+	MakeTempDir( appDir, sizeof( appDir ) );
+	printf( "server-failed callback re-registered while it runs\n" );
+	BlueInitOptions options = Options( appDir );
+	CHECK_OK( blue_initialize( &options, &e_ ) );
+	BlueObject* paths = NULL;
+	BlueObject* cache = NULL;
+	BlueObject* resMan = NULL;
+	CHECK_OK( blue_module_object_get( NAME( "paths" ), &paths, &e_ ) );
+	CHECK_OK( blue_module_object_get( NAME( "remoteFileCache" ), &cache, &e_ ) );
+	CHECK_OK( blue_module_object_get( NAME( "resMan" ), &resMan, &e_ ) );
+	if( paths && cache && resMan )
+	{
+		SetString( cache, "server", "http://127.0.0.1:1" );
+		SetString( cache, "backupServer", "http://127.0.0.1:1" );
+		SetString( cache, "cacheFolder", appDir );
+		InvokeWithString( cache, "AddFileIndex", "res:/capitest/race.txt,race,0,0" );
+		InvokeWithString( paths, "RegisterFileSystemBeforeLocal", "Remote" );
+
+		static ServerFailed first;
+		static ServerFailed second;
+		first.block = 1;
+		RegisterServerFailed( cache, &first );
+		BlueObject* resource = GetResource( resMan, "res:/capitest/race.txt" );
+		for( int frame = 0; frame < 5000 && !atomic_load( &first.entered ); ++frame )
+		{
+			CHECK_OK( blue_pump( &e_ ) );
+			SleepOneMillisecond();
+		}
+		CHECK( atomic_load( &first.entered ) );
+
+		/* Drops blue's reference to the running callback, which was the last but the call's */
+		RegisterServerFailed( cache, &second );
+		CHECK( atomic_load( &first.destroyed ) == 0 );
+		atomic_store( &first.reregistered, 1 );
+		if( resource )
+		{
+			PumpUntilLoaded( resource );
+			CHECK( GetFlag( resource, "isGood" ) == 0 );
+		}
+		printf( "  first: %d call(s) (%s), destroyed %d; second: %d call(s) (%s)\n", atomic_load( &first.calls ), first.server,
+			atomic_load( &first.destroyed ), atomic_load( &second.calls ), second.server );
+		CHECK( atomic_load( &first.calls ) == 1 && strcmp( first.server, "Primary" ) == 0 && first.onLoaderThread );
+		CHECK( first.destroyedDuringCall == 0 && atomic_load( &first.destroyed ) == 1 && !first.destroyedOnMainThread );
+		CHECK( atomic_load( &second.calls ) == 1 && strcmp( second.server, "Backup" ) == 0 && second.onLoaderThread );
+		CHECK( atomic_load( &second.destroyed ) == 0 );
+
+		RegisterServerFailed( cache, NULL );
+		CHECK( atomic_load( &second.destroyed ) == 1 && second.destroyedOnMainThread );
+		InvokeWithString( paths, "UnregisterFileSystem", "Remote" );
+		blue_release( resource );
+	}
+	blue_release( paths );
+	blue_release( cache );
+	blue_release( resMan );
+	CHECK_OK( blue_shutdown( &e_ ) );
+	rmdir( appDir );
+	return s_failures;
+}
+
 /* blue_shutdown with waits open: each fn runs once, from blue_shutdown, with SHUTDOWN (or the
  * state it was decided with); the waits held the last references to their resources */
 static int RunResourceWaitShutdown( void )
@@ -2243,9 +2397,13 @@ int main( int argc, char** argv )
 	{
 		failures = RunResourceWaitShutdown();
 	}
+	else if( strcmp( mode, "server-failed-callback" ) == 0 )
+	{
+		failures = RunServerFailedCallback();
+	}
 	else
 	{
-		fprintf( stderr, "usage: %s [all|init-failure|no-shutdown|resource-wait-shutdown]\n", argv[0] );
+		fprintf( stderr, "usage: %s [all|init-failure|no-shutdown|resource-wait-shutdown|server-failed-callback]\n", argv[0] );
 		return 2;
 	}
 	printf( failures ? "BlueCApiTest %s: %d FAILED\n" : "BlueCApiTest %s: OK\n", mode, failures );

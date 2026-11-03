@@ -41,7 +41,8 @@ RemoteFileCache::RemoteFileCache() :
 	m_fullHeaderLogging( false ),
 	m_verifyContentsOnSave( true ),
 	m_verifyContentsOnLoad( true ),
-	m_on_server_failed_callback()
+	m_on_server_failed_callback(),
+	m_onServerFailedCallbackMutex( "RemoteFileCache", "m_onServerFailedCallbackMutex" )
 {
 }
 
@@ -171,20 +172,19 @@ Be::Result<std::string> RemoteFileCache::GetStreamFromPathW( const wchar_t* resP
 				}
 			}
 
-			if( m_registerDownloadErrors && m_on_server_failed_callback )
+			if( m_registerDownloadErrors )
 			{
 				//Callback into python to register exception that will show up on Sentry
-				m_on_server_failed_callback.CallVoid( "Primary", resPath, m_server.c_str() );
-				
+				ReportServerFailed( "Primary", resPath, m_server.c_str() );
 			}
 
 			isOK = TryDownload( m_backupServer, filename, remoteStream, expectedSize, resPath );
 			if( !isOK )
 			{
-				if( m_registerDownloadErrors && m_on_server_failed_callback )
+				if( m_registerDownloadErrors )
 				{
 					//Callback into python to register exception that will show up on Sentry
-					m_on_server_failed_callback.CallVoid( "Backup", resPath, m_backupServer.c_str() );
+					ReportServerFailed( "Backup", resPath, m_backupServer.c_str() );
 				}
 
 				CCP_STATS_INC( remoteFileCacheFailedBackup );
@@ -378,7 +378,34 @@ void RemoteFileCache::AddFileIndexImpl( const char* contents, ssize_t size )
 
 void RemoteFileCache::RegisterOnServerFailedCallback( BlueScriptCallback callback )
 {
+	// The old callback's reference drops after the lock is released: its destroy (or a Python
+	// finalizer, which can release the GIL) must not run with the lock held
+	BlueScriptCallback old;
+	CcpAutoMutex lock( m_onServerFailedCallbackMutex );
+	old = m_on_server_failed_callback;
 	m_on_server_failed_callback = callback;
+}
+
+// Runs on the async loader thread while the main thread may re-register the callback. The call
+// goes to a copy taken under the lock, which holds a reference of its own until the function has
+// returned; the last reference may drop here, on this thread.
+void RemoteFileCache::ReportServerFailed( const char* server, const wchar_t* resPath, const char* url )
+{
+#if BLUE_WITH_PYTHON
+	// Copying and dropping a Python callback changes its reference count. The GIL comes before
+	// the lock, as for RegisterOnServerFailedCallback, which is called from Python.
+	auto gil = PyGILState_Ensure();
+	ON_BLOCK_EXIT( [&gil] { PyGILState_Release( gil ); } );
+#endif
+	BlueScriptCallback callback;
+	{
+		CcpAutoMutex lock( m_onServerFailedCallbackMutex );
+		callback = m_on_server_failed_callback;
+	}
+	if( callback )
+	{
+		callback.CallVoid( server, resPath, url );
+	}
 }
 
 void RemoteFileCache::AddFileIndex( const std::string& fileIndex )
