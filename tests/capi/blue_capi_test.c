@@ -205,6 +205,10 @@ static void TestBeforeInitialize( void )
 	CHECK( blue_is_initialized() == 0 );
 }
 
+/* A class resolved on the main thread, for OffThread: off it, blue_class_at gives NULL, which
+ * would make blue_member_find return NULL without its thread check */
+static const BlueClass* s_offThreadClass = NULL;
+
 static void* OffThread( void* arg )
 {
 	int32_t* results = (int32_t*)arg;
@@ -217,7 +221,7 @@ static void* OffThread( void* arg )
 	BlueSignatureInfo signature;
 	signature.struct_size = sizeof( signature );
 	results[4] = blue_function_signature( NULL, &signature );
-	results[5] = blue_member_find( blue_class_at( 0 ), NAME( "size" ) ) == NULL ? 1 : 0;
+	results[5] = blue_member_find( s_offThreadClass, NAME( "size" ) ) == NULL ? 1 : 0;
 	BlueCValue value;
 	results[6] = blue_member_get( NULL, NULL, &value, NULL );
 	return NULL;
@@ -254,6 +258,8 @@ static void TestInitialize( const char* appDir )
 	/* Another thread is refused, except for the thread-free functions */
 	pthread_t thread;
 	int32_t results[7] = { 0, 0, -1, -1, 0, 0, 0 };
+	s_offThreadClass = blue_class_find( NAME( "MemStream" ) );
+	CHECK( s_offThreadClass != NULL && blue_member_find( s_offThreadClass, NAME( "size" ) ) != NULL );
 	CHECK( pthread_create( &thread, NULL, OffThread, results ) == 0 );
 	CHECK( pthread_join( thread, NULL ) == 0 );
 	CHECK( results[0] == BLUE_E_WRONG_THREAD );
