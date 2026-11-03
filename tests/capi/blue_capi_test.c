@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int s_failures = 0;
@@ -269,6 +270,18 @@ static void TestInitialize( const char* appDir )
 	CHECK( results[4] == BLUE_E_WRONG_THREAD );
 	CHECK( results[5] == 1 );
 	CHECK( results[6] == BLUE_E_WRONG_THREAD );
+
+	/* So is a forked child, also from the main thread, whose id the check has read already */
+	pid_t child = fork();
+	CHECK( child >= 0 );
+	if( child == 0 )
+	{
+		_exit( blue_class_find( NAME( "MemStream" ) ) == NULL && blue_pump( NULL ) == BLUE_E_WRONG_THREAD ? 0 : 1 );
+	}
+	int status = -1;
+	CHECK( child > 0 && waitpid( child, &status, 0 ) == child );
+	CHECK( WIFEXITED( status ) && WEXITSTATUS( status ) == 0 );
+	CHECK( blue_class_find( NAME( "MemStream" ) ) == s_offThreadClass );
 }
 
 static void TestClasses( void )

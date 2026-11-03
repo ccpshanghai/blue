@@ -20,6 +20,9 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <pthread.h>
+#endif
 
 static CcpLogChannel_t s_ch = CCP_LOG_DEFINE_CHANNEL( "CApi" );
 
@@ -39,6 +42,20 @@ enum StateValue
 
 std::atomic<int> s_state{ STATE_UNINITIALIZED };
 CcpThreadId_t s_mainThread{};
+
+// This thread's id, read once: CcpGetCurrentThreadId is a syscall on Linux (gettid), and
+// CheckCaller runs on every call. Its own id, not "is the main thread", so nothing cached can
+// outlive a main thread. {} is no thread's id: not read yet, or reset in a forked child
+thread_local CcpThreadId_t t_threadId{};
+
+CcpThreadId_t CurrentThreadId()
+{
+	if( t_threadId == CcpThreadId_t{} )
+	{
+		t_threadId = CcpGetCurrentThreadId();
+	}
+	return t_threadId;
+}
 
 // The end of the last BlueInitOptions field of version 1.0: the smallest struct_size accepted.
 // BlueInitOptions.reserved (1.3) follows it and is never read: 1.0-1.2 hosts left it
@@ -191,7 +208,7 @@ int32_t CheckCaller()
 	{
 		return BLUE_E_NOT_INITIALIZED;
 	}
-	if( CcpGetCurrentThreadId() != s_mainThread )
+	if( CurrentThreadId() != s_mainThread )
 	{
 		return BLUE_E_WRONG_THREAD;
 	}
@@ -395,7 +412,14 @@ int32_t blue_initialize( const BlueInitOptions* options, BlueCError* err )
 			return capture.Fail( error, BLUE_E_FAILED, "setting blue's search paths failed" );
 		}
 
-		s_mainThread = CcpGetCurrentThreadId();
+#ifndef _WIN32
+		// The forking thread goes on in the child under a new id. Registered once (blue starts
+		// once per process), before any thread has cached its id
+		pthread_atfork( nullptr, nullptr, []() {
+			t_threadId = CcpThreadId_t{};
+		} );
+#endif
+		s_mainThread = CurrentThreadId();
 		guard.committed = true;
 		s_state = STATE_RUNNING;
 		CCP_LOG_CH( s_ch, "Blue C API %u.%u started", unsigned( BLUE_CAPI_VERSION_MAJOR ), unsigned( BLUE_CAPI_VERSION_MINOR ) );
