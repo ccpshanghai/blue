@@ -170,7 +170,7 @@ HERR:
 		CloseHandle(h);
 	return 0;
 
-#elif defined(__APPLE__) || defined(__ANDROID__)
+#elif defined(__APPLE__) || defined(__linux__)
 	wchar_t* tmp = PyUnicode_AsWideCharString( ufn.o, nullptr );
 	if ( !tmp )
 	{
