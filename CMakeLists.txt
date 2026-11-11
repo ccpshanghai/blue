@@ -13,9 +13,10 @@ find_package(carbon-core REQUIRED CONFIG)
 find_package(carbon-blueexposure REQUIRED CONFIG)
 find_package(carbon-io REQUIRED CONFIG)
 find_package(CURL REQUIRED CONFIG)
-# libyaml installs yamlConfig.cmake. Windows finds YAMLConfig.cmake because
-# the filesystem is case-insensitive. Linux does not.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# libyaml installs yamlConfig.cmake. Case-insensitive hosts (Windows, default macOS) find it as
+# YAML; a Linux host only finds the lowercase name, whatever the target (Android included).
+# Both spellings load the same file and define the target `yaml`.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
     find_package(yaml REQUIRED CONFIG)
 else()
     find_package(YAML REQUIRED CONFIG)
