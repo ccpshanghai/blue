@@ -12,7 +12,9 @@
 #include "IBluePaths.h"
 #include "IBlueObjectMetadata.h"
 #include <Scheduler.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <locale.h> // _create_locale, LC_ALL: no longer reached through the MSVC 14.5x STL headers
+#else
 #include <locale>
 #include <codecvt>
 #endif

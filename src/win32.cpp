@@ -692,7 +692,7 @@ PyObject *PyGetProcessMemoryInfo(PyObject *self, PyObject *args)
 	BOOL ok = GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters));
 	
 	if (!ok)
-		return PyWin32Error(), 0;
+		return PyWin32Error(), nullptr;
 
 	return Py_BuildValue("{si sN sN sN sN sN sN sN sN}",
 		"PageFaultCount",				counters.PageFaultCount,
@@ -823,7 +823,7 @@ PyObject* PyToggleTcpEStats(PyObject* self, PyObject* args)
 {
 	if( loader->SetPerTcpConnectionEStats() == NULL || loader->GetExtendedTcpTable() == NULL )
 	{
-		return PyErr_SetString( PyExc_NotImplementedError, "Not available on this platform" ), NULL;
+		return PyErr_SetString( PyExc_NotImplementedError, "Not available on this platform" ), nullptr;
 	}
 
 	int enableInt;
