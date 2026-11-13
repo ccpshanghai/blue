@@ -8,6 +8,7 @@
 #include "Blue.h"
 #include "BluePaths.h"
 #include "BlueOS.h"
+#include "BlueStatistics.h"
 #include "ResourceLoading.h"
 #include "BlueSocketLogger.h"
 #if BLUE_WITH_PYTHON
@@ -677,6 +678,11 @@ void ExtractReturnCode( PyObject* code )
 		else if( PyLong_Check( code ) )
 		{
 			s_exitCode = int( PyLong_AsLong( code ) );
+			if( s_exitCode == -1 && PyErr_Occurred() )
+			{
+				// Out of range for a C long. Don't leave the OverflowError pending when calling the real sys.exit
+				PyErr_Clear();
+			}
 		}
 		else
 		{
@@ -688,16 +694,22 @@ void ExtractReturnCode( PyObject* code )
 PyObject* BlueExceptHook( PyObject* self, PyObject* args )
 {
 	s_exitCode = 1;
-	return PyObject_Call( PySys_GetObject( (char*)"__excepthook__" ), args, nullptr );
+	PyObject* hook = PySys_GetObject( (char*)"__excepthook__" );
+	if( !hook )
+	{
+		PyErr_SetString( PyExc_RuntimeError, "lost sys.__excepthook__" );
+		return nullptr;
+	}
+	return PyObject_Call( hook, args, nullptr );
 }
 
 PyObject* BlueExit( PyObject* self, PyObject* args )
 {
+	// Borrowed reference, owned by args
 	PyObject* code = nullptr;
 	if( PyArg_ParseTuple( args, "|O", &code ) )
 	{
 		ExtractReturnCode( code );
-		Py_XDECREF( code );
 	}
 	return PyObject_Call( s_savedSysExit, args, nullptr );
 }
@@ -723,6 +735,13 @@ void PatchPythonExit()
 	Py_DecRef( fn );
 
 	s_savedSysExit = PySys_GetObject( (char*)"exit" );
+	if( !s_savedSysExit )
+	{
+		Py_DecRef( sysmodule );
+		return;
+	}
+	// PySys_GetObject returns a borrowed reference and we are about to replace sys.exit, so hold our own
+	Py_INCREF( s_savedSysExit );
 
 	static PyMethodDef exitDef;
 	exitDef.ml_doc = "Patched sys.exit that records process exit code.\nPart of Blue exit patching";
@@ -741,6 +760,18 @@ void PatchPythonExit()
 PyMODINIT_FUNC BLUE_EXPORTED_INIT
 	CCP_CONCATENATE( PyInit_blue, CCP_BUILD_FLAVOR ) (void)
 {
+	if ( const auto& [unused, ok] = CcpTelemetryCategoryRegister( "blue", CcpColor::DodgerBlue ); !ok )
+	{
+		CCP_LOGWARN( "Failed to register telemetry category for blue, no telemetry zones will be emitted" );
+	}
+
+	// Categories compare by the name they were registered with rather than by wrapper identity. This
+	// has to be set up before the type objects are finalized, which happens while BeOS starts up.
+	if ( !BlueTelemetryCategory::RegisterComparison() )
+	{
+		return nullptr;
+	}
+
 	CCP_LOG( "Initializing Resource Loading" );
 	BlueInitializeResourceLoading();
 
@@ -753,6 +784,18 @@ PyMODINIT_FUNC BLUE_EXPORTED_INIT
 	PatchPythonExit();
 
 	auto blueModule = PyOS->BlueModule();
+	if ( !blueModule )
+	{
+		return nullptr;
+	}
+
+	// The color constants can only be added once the type objects have been finalized, which
+	// happens while the module is being created.
+	if ( !BlueTelemetryColor::RegisterConstants() )
+	{
+		return nullptr;
+	}
+
 	return blueModule;
 }
 
