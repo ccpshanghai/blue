@@ -13,7 +13,7 @@
 #include "IBluePaths.h"
 #include "IBlueObjectMetadata.h"
 #include <Scheduler.h>
-#if __APPLE__
+#if __APPLE__ || __ANDROID__
 #include <locale>
 #include <codecvt>
 #elif _WIN32
