@@ -150,6 +150,7 @@ ccp_add_library(Blue SHARED
     src/BlueSocketLogger.h
     src/BlueStatistics.cpp
     src/BlueStatistics_Blue.cpp
+    src/BlueStatsMacros.h
     src/BlueStreamMethods.cpp
     src/BlueSysInfo.cpp
     src/BlueSysInfo.h
@@ -375,7 +376,8 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         # co-located with exefile alongside any runtime dependencies.
         # This needs to be hardened
         if (DEFINED CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE MATCHES "Release")
-            set(EXEFILE_TOOL_NAME exefile_${CMAKE_BUILD_TYPE})
+            string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYP_LOWER)
+            set(EXEFILE_TOOL_NAME exefile_${CMAKE_BUILD_TYP_LOWER})
         else()
             set(EXEFILE_TOOL_NAME exefile)
         endif()

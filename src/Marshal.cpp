@@ -9,11 +9,12 @@
 #include "BlueMemStream.h"
 #include "BlueResFile.h"
 #include <BlueStatistics.h>
+#include "BlueStatsMacros.h"
 #include "PyTemplates.h"
 #include "ITaskletTimer.h"
 #include "IBluePython.h"
 
-#include "PyRowset.h"
+#include "PyRowSet.h"
 
 #include <algorithm>
 #include "zlib.h"
@@ -639,6 +640,11 @@ PyObject *WriteStream::tp_richcompare_method(PyObject *self, PyObject* other, in
 	if (self == other)
 	{
 		Py_RETURN_TRUE;
+	}
+
+	if (self->ob_type != other->ob_type)
+	{
+		Py_RETURN_NOTIMPLEMENTED;
 	}
 
 	WriteStream *_self = static_cast<WriteStream*>(self);
@@ -1424,7 +1430,7 @@ PyObject * Marshal::ReadObjectTuple1( ReadStream * stream, bool isShared )
 
 PyObject* Marshal::ReadObject( ReadStream *stream )
 {
-	CCP_STATS_ZONE( __FUNCTION__ );
+	BLUE_STATS_ZONE( __FUNCTION__ );
 
 	Incrementor _inc(mRecursionLevel);
 	if( !_inc.Test( sRecursionLimit ) )
