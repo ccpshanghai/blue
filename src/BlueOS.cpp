@@ -113,6 +113,9 @@ static bool HeapScrewed()
 	return false;
 }
 
+// How often PumpOS asks whether a debugger is attached while the frame-time watchdog runs.
+static constexpr std::chrono::seconds DEBUGGER_CHECK_INTERVAL{ 1 };
+
 #ifdef _WIN32
 
 // This is not nice
@@ -666,9 +669,20 @@ void BlueOS::PumpOSInternal()
 		BeCrashes->SetCrashKeyValue( "timeSinceStartup", timeStr );
 	}
 
-	if( CcpIsDebuggerPresent() )
+	// An attached debugger stops the frame-time watchdog. The query reads /proc/self/status on Linux
+	// and Android and calls sysctl on Apple platforms, which costs a sizeable part of a frame, so it
+	// runs only while the watchdog runs and at most once per DEBUGGER_CHECK_INTERVAL.
+	if( m_frameTimeWatchdog.IsRunning() )
 	{
-		m_frameTimeWatchdog.Stop();
+		const auto now = std::chrono::steady_clock::now();
+		if( now >= m_nextDebuggerCheckTime )
+		{
+			m_nextDebuggerCheckTime = now + DEBUGGER_CHECK_INTERVAL;
+			if( CcpIsDebuggerPresent() )
+			{
+				m_frameTimeWatchdog.Stop();
+			}
+		}
 	}
 
 	m_frameTimeWatchdog.Tick();
@@ -2161,6 +2175,7 @@ void BlueOS::SetFrameTimeTimeout( uint32_t val )
 	m_frameTimeTimeout = val;
 	s_timeoutHandler.Reset();
 	m_frameTimeWatchdog.Start( m_frameTimeTimeout, &s_timeoutHandler );
+	m_nextDebuggerCheckTime = {}; // check on the first frame after a (re)start
 }
 
 uint32_t BlueOS::GetDesiredFrameTimeMilliseconds() const

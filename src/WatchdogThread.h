@@ -17,6 +17,7 @@ public:
 	void Start( uint32_t timeoutInMs, ITimeoutHandler* timeoutHandler );
 	void Stop();
 	void Tick();
+	bool IsRunning() const { return m_isRunning != 0; }
 
 private:
 	static uint32_t ThreadFunc( void* context );

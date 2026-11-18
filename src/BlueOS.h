@@ -192,6 +192,7 @@ private:
 
 	WatchdogThread m_frameTimeWatchdog;
 	uint32_t m_frameTimeTimeout;
+	std::chrono::steady_clock::time_point m_nextDebuggerCheckTime{};
 	int32_t m_desiredFrameTimeMilliseconds{10};
 	
 	uint32_t GetFrameTimeTimeout() const;

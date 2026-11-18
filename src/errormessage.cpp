@@ -6,6 +6,7 @@
 #include "errormessage.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 #if _WIN32
 #include "WinNls.h"
@@ -282,6 +283,38 @@ std::string GetOSLanguageCode()
 		__system_property_get( "ro.product.locale", buffer );
 	}
 	return buffer;
+#elif defined(__linux__) && !defined(__ANDROID__)
+	// glibc has no system-property API. LC_ALL then LANG, cut to the primary
+	// language subtag the string tables are keyed by. A miss stays English.
+	std::string tag;
+	if( const char* locale = std::getenv( "LC_ALL" ) )
+	{
+		tag = locale;
+	}
+	if( tag.empty() || tag == "C" || tag == "POSIX" )
+	{
+		if( const char* locale = std::getenv( "LANG" ) )
+		{
+			tag = locale;
+		}
+	}
+	auto end = tag.find_first_of( "_.@-" );
+	if( end != std::string::npos )
+	{
+		tag.resize( end );
+	}
+	std::transform( tag.begin(), tag.end(), tag.begin(), []( unsigned char c )
+	{
+		return static_cast<char>( std::tolower( c ) );
+	} );
+	for( const auto& supported : allSupportedLanguageTags )
+	{
+		if( tag == supported )
+		{
+			return supported;
+		}
+	}
+	return en;
 #else
 #error Unsupported platform!
 #endif
@@ -350,6 +383,8 @@ void BlueShowInvalidOSVersionError()
 	// No IDS_ id for this yet, and 0 is not a key in any string table, so GetByID hands back
 	// the English original. Add a proper id here if Android ever needs this localised.
 	std::string localizedMessage = TranslateErrorMessage( "Unsupported OS version", 0 );
+#elif defined(__linux__) && !defined(__ANDROID__)
+	std::string localizedMessage = TranslateErrorMessage( "Unsupported OS version", 0 );
 #else
 	#error Unsupported platform!
 #endif
@@ -396,6 +431,8 @@ void DisplayErrorMessageBox( const char* title, const char* message )
 	// Nothing a plain native library can raise as a dialog here. The CCP_LOG in the Apple
 	// branch above is inside that branch, so without this line the message would vanish
 	// entirely on Android. A UI-layer callback is the real answer if it must be visible.
+	CCP_LOG( "Message %s", message );
+#elif defined(__linux__) && !defined(__ANDROID__)
 	CCP_LOG( "Message %s", message );
 #else
 #error Unsupported platform!

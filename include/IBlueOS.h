@@ -150,12 +150,12 @@ BLUE_INTERFACE(IBlueOS) : public IRoot
 
 #if _WIN32
     typedef DWORD OsErrorType;
-#elif defined(__ANDROID__)
-    // bionic does not provide the C11 Annex K errno_t. Apple does, which is why this only
-    // shows up on Android -- and it is int on every platform that defines it at all.
-    typedef int OsErrorType;
-#else
+#elif defined(__APPLE__)
     typedef errno_t OsErrorType;
+#else
+    // glibc and bionic do not provide the C11 Annex K errno_t. Apple does, and it is
+    // int on every platform that defines it at all.
+    typedef int OsErrorType;
 #endif
     
 	struct Error
