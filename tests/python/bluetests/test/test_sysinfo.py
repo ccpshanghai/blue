@@ -99,7 +99,9 @@ class TestSysInfo(unittest.TestCase):
         self.assertLess(now - start, 10 * 60 * 60)
 
     @unittest.skipIf(
-        sys.platform == 'android',
+        # sys.platform is 'linux' on Android before CPython 3.13 (PEP 738); getandroidapilevel
+        # exists on every CPython built for Android.
+        hasattr(sys, 'getandroidapilevel'),
         'Android exposes no device identifier to native code, so machineUuid is empty by '
         'design: ro.serialno became privileged in Android 10, and ANDROID_ID needs a JNI '
         'round trip through Settings.Secure and is per-signing-key rather than per-device. '

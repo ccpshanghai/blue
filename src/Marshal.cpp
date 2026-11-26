@@ -2579,7 +2579,11 @@ bool Marshal::WriteLong(WriteStream *stream, PyObject *lng)
 	// false WriteObject()/WriteLong() without setting its own exception, so something in the
 	// chain must have set one, or Python raises "SystemError: error return without exception
 	// set" instead of the real error.
+#if PY_VERSION_HEX >= 0x030D0000
 	int i = _PyLong_AsByteArray((PyLongObject*)lng, &buf[0], nbytes, 1, 1, 1);
+#else
+	int i = _PyLong_AsByteArray((PyLongObject*)lng, &buf[0], nbytes, 1, 1);
+#endif
 	if (i)
 		return false;
 	//the last byte may be redundant
