@@ -351,8 +351,10 @@ void BlueOS::UnregisterForTicks( IBlueEvents *cb, void* cookie )
 
 
 // Defining this ourselves hijacks CPython fatal-error handling, which the linker tolerates
-// against a shared libpython. iOS links libpython3.13.a statically, so both definitions land in
-// one link and ld reports a duplicate symbol. Letting CPython handle it costs the CCP_LOGERR
+// against a shared libpython. With a static libpython on iOS (CPython 3.13 on mobile-exp was
+// linked statically) both definitions land in one link and ld reports a duplicate symbol; with
+// CPython 3.12's Python.framework, Mach-O's two-level namespace keeps CPython's own calls on its
+// own definition, so ours would not take effect there either. Letting CPython handle it costs the CCP_LOGERR
 // line, and is arguably better there: SIGKILL below yields no crash report on iOS, abort does.
 #if !TARGET_OS_IPHONE
 void _Py_FatalErrorFunc( const char* _func, const char* msg )
