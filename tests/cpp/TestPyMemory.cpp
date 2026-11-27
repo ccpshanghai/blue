@@ -98,3 +98,20 @@ TEST_F( PythonMemoryAllocatorTest, TracksAllocatedAmount )
 	CcpStatistics::Update();
 	EXPECT_EQ( int64_t( CCP_STATS_GET( pyMemory ) ), initial ) << "Free #2 failed for Domain: " << domain;
 }
+
+TEST_F( PythonMemoryAllocatorTest, InstallingTwiceKeepsOneLayer )
+{
+	// SetUp installed the hooks once; a second call must leave the raw allocator as it is.
+	PyMemAllocatorEx before;
+	PyMem_GetAllocator( PYMEM_DOMAIN_RAW, &before );
+	BlueInstallPythonMemoryHooks();
+	PyMemAllocatorEx after;
+	PyMem_GetAllocator( PYMEM_DOMAIN_RAW, &after );
+	EXPECT_EQ( before.ctx, after.ctx );
+	EXPECT_EQ( before.malloc, after.malloc );
+
+	// With the old guard the measured allocator forwarded to itself and this never returned.
+	void* p = PyMem_RawMalloc( 64 );
+	EXPECT_NE( p, nullptr );
+	PyMem_RawFree( p );
+}
