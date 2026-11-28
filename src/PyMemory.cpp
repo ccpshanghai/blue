@@ -91,7 +91,11 @@ extern "C" BLUEIMPORT void BlueInstallPythonMemoryHooks()
 	// even from the _MEM and _OBJ domains. The reason for this is that Python's _MEM and _OBJ domains use an internal heap
 	// that works on memory allocated through the _RAW domain.
 	PyMem_GetAllocator( PYMEM_DOMAIN_RAW, &temporaryHelper );
-	if( temporaryHelper.ctx != &override.ctx )
+	// Already installed when the current allocator's context is ours. This compared against
+	// &override.ctx, the address of the field, which never equals any context: a second call
+	// then took our own allocator as the one to forward to, and the first allocation recursed
+	// until the stack ran out.
+	if( temporaryHelper.ctx != override.ctx )
 	{
 		measurer.allocator = temporaryHelper;
 		PyMem_SetAllocator( PYMEM_DOMAIN_RAW, &override );

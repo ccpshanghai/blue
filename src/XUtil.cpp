@@ -14,6 +14,11 @@
 // don't see any particular reason they should be there, but I'm taking it
 // one step at a time.
 
+// CPython 3.13 moved _PySet_NextEntry into internal/pycore_setobject.h behind Py_BUILD_CORE,
+// so on 3.13 and later PyXUtil_Filter walks the set through the public iterator protocol (the
+// ccpshanghai mobile-exp version). 3.12, which upstream and mobile-exp both run now, keeps
+// upstream's code as is.
+#if PY_VERSION_HEX >= 0x030D0000
 PyObject *BluePyOS::PyXUtil_Filter(PyObject *args)
 {
 #if CCP_STACKLESS
@@ -166,6 +171,107 @@ PyObject *BluePyOS::PyXUtil_Filter(PyObject *args)
 
 #endif
 }
+#else
+PyObject *BluePyOS::PyXUtil_Filter(PyObject *args)
+{
+#if CCP_STACKLESS
+
+	// takes in the set to filter, the list with the ordinals (indices) to filter by, a corresponding list of values to filter on, and a set to put the results in.
+    PyObject* rows;
+    PyObject* indices;
+    PyObject* condvalues;
+    PyObject* retset;
+	struct {
+		Py_ssize_t dataIdx;
+		int64_t cond;
+		DBRow::datatypes type;
+	} myvec[4];
+    
+    if (!PyArg_ParseTuple(args, "O!O!O!O!:XUtil_Filter", &PySet_Type, &rows, &PyList_Type, &indices, &PyList_Type, &condvalues, &PySet_Type, &retset))
+        return NULL;
+        
+    // special case if list is empty or if no conditions
+    if (PySet_Size(rows) == 0)
+    {
+        Py_INCREF(retset);
+        return retset;
+    }
+    
+    // Error out if indices and condvalues don't match up or if we get more then we're ready for
+    if (PyList_GET_SIZE(indices) != PyList_GET_SIZE(condvalues))
+        return PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: Length of index list value list don't match up"), nullptr;
+
+	//Get initial dude.  We assume all of them are the same, so we use this for info on how to index the data
+    PyObject *first;
+    Py_ssize_t setpos = 0;
+	Py_hash_t hash;
+    _PySet_NextEntry(rows, &setpos, &first, &hash);
+    if (!PyObject_IsInstance(first, (PyObject*)DBRow::GetType()))
+		return PyErr_Format(PyExc_RuntimeError, "XUtil_Filter: Row in rowset must be of type DBRow");
+
+	// build standard vectors of these guys so we don't have to use python getters inside the loop.
+	int numConds = 0;
+	for (Py_ssize_t j = 0; j < PyList_GET_SIZE(indices); j++)
+    {
+		//ignore NULL conditions
+		PyObject *idxO = PyList_GET_ITEM(indices, j);
+		PyObject *cndO = PyList_GET_ITEM(condvalues, j);
+		if (idxO == Py_None || cndO == Py_None)
+			continue;
+		
+		if (numConds >= sizeof(myvec) / sizeof(myvec[0]))
+			 return PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: Too many conditions to Filter on."), nullptr;
+		
+        int idx = int( PyLong_AS_LONG(idxO) );
+        Py_ssize_t nullOffset; //throwaway
+		myvec[numConds].dataIdx = static_cast<DBRow*>( first )->GetDataOffset(idx, myvec[numConds].type, nullOffset);
+		if (myvec[numConds].dataIdx<0)
+			return PyErr_SetString(PyExc_ValueError, "invalid column"), nullptr;
+		myvec[numConds].cond = PyLong_AsLongLong(cndO);
+		if (myvec[numConds].cond == (int64_t)(-1) && PyErr_Occurred())
+			return PyErr_SetString(PyExc_OverflowError, "XUtil_Filter: 64 bit value overflowed! "), nullptr;
+		++numConds;
+    }
+	
+     // go through the whole set and check each condition, continuing on any failure
+    setpos = 0;
+    PyObject* row;
+    while (_PySet_NextEntry(rows, &setpos, &row, &hash))
+    {
+        //  Error out if passed non-DBRows
+        if (!PyObject_IsInstance(row, (PyObject*)DBRow::GetType()))
+            return PyErr_Format(PyExc_RuntimeError, "XUtil_Filter: Row in rowset must be of type DBRow");
+            
+        // check each condition before adding to return list
+        bool include = true;
+        for (long j = 0; j < numConds; j++)
+        {  
+            int64_t value;
+			if ( ! static_cast<DBRow*>( row )->GetValue(myvec[j].type, myvec[j].dataIdx, value) )
+                return PyErr_SetString(PyExc_RuntimeError, "XUtil_Filter: Unsupported data type or index out of range for DBRow"), nullptr;
+            if (myvec[j].cond != value)
+            {
+                include = false;
+                break;
+            }
+        }
+        if (!include)
+            continue;
+        // All conditions hold, add to return set
+        if ( 0 != PySet_Add(retset, row) )
+            return 0; 
+    }
+
+    Py_INCREF(retset);
+    return retset;
+
+#else
+
+	return nullptr;
+
+#endif
+}
+#endif
 
 
 //--------------------------------------------------------------------
