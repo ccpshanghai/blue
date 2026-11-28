@@ -55,6 +55,9 @@ public:
 		// Not ANDROID: the NDK toolchain defines that as a macro on every compile line, so an
 		// enumerator of that name would be expanded to 1 before the compiler ever saw it.
 		ANDROID_OS,
+		// Not LINUX, for the same reason: gcc defines linux (lowercase) and keeping the _OS suffix
+		// keeps the two spellings beside each other.
+		LINUX_OS,
 	};
 
 	enum Suite

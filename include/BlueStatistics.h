@@ -11,6 +11,9 @@
 
 #include <ICcpStatisticsAccumulator.h>
 
+// CcpStatisticsType_t is declared in CcpCore, which cannot include blueexposure.
+BLUE_INVOKE_CANONICAL_NAME( CcpStatisticsType_t, "CcpStatisticsType_t" );
+
 BLUE_DECLARE( CcpStatisticsEntry );
 
 BLUE_CLASS( CcpStatisticsEntry ) : public IRoot

@@ -13,7 +13,14 @@ find_package(carbon-core REQUIRED CONFIG)
 find_package(carbon-blueexposure REQUIRED CONFIG)
 find_package(carbon-io REQUIRED CONFIG)
 find_package(CURL REQUIRED CONFIG)
-find_package(YAML REQUIRED CONFIG)
+# libyaml installs yamlConfig.cmake. Case-insensitive hosts (Windows, default macOS) find it as
+# YAML; a Linux host only finds the lowercase name, whatever the target (Android included).
+# Both spellings load the same file and define the target `yaml`.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    find_package(yaml REQUIRED CONFIG)
+else()
+    find_package(YAML REQUIRED CONFIG)
+endif()
 find_package(zlib CONFIG REQUIRED)
 find_package(carbon-scheduler REQUIRED CONFIG)
 find_package(OpenSSL COMPONENTS Crypto SSL REQUIRED)
@@ -81,6 +88,7 @@ ccp_add_library(Blue SHARED
     src/BlueClipboard.h
     src/BlueClipboard.mm
     src/BlueClipboardAndroid.cpp
+    src/BlueClipboardLinux.cpp
     src/BlueClipboard_Blue.cpp
     src/BlueEventToPython.cpp
     src/BlueEventToPython.h
@@ -155,6 +163,7 @@ ccp_add_library(Blue SHARED
     src/BlueSysInfo.cpp
     src/BlueSysInfo.h
     src/BlueSysInfoAndroid.cpp
+    src/BlueSysInfoLinux.cpp
     src/BlueSysInfo_Blue.cpp
     src/BlueTestHelpers.cpp
     src/BlueTestHelpers.h
